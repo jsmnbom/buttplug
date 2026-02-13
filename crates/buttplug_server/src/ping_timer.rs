@@ -85,7 +85,7 @@ impl PingTimer {
   where
     F: FnOnce() + Send + 'static,
   {
-    let (sender, receiver) = mpsc::channel(256);
+    let (sender, receiver) = mpsc::channel(16);
     let cancellation_token = CancellationToken::new();
     if max_ping_time > 0 {
       let callback = Arc::new(Mutex::new(on_ping_timeout));

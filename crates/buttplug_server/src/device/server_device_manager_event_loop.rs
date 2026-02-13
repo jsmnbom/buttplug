@@ -104,7 +104,7 @@ impl ServerDeviceManagerEventLoop {
     output_observation_sender: Option<broadcast::Sender<OutputObservation>>,
     task_group: TaskGroup,
   ) -> Self {
-    let (device_event_sender, device_event_receiver) = mpsc::channel(256);
+    let (device_event_sender, device_event_receiver) = mpsc::channel(16);
     Self {
       comm_managers,
       device_config_manager,

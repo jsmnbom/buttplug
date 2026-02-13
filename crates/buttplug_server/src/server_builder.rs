@@ -91,7 +91,7 @@ impl ButtplugServerBuilder {
     debug!("Creating server '{}'", self.name);
 
     // Set up our channels to different parts of the system.
-    let (output_sender, _) = broadcast::channel(256);
+    let (output_sender, _) = broadcast::channel(16);
 
     // Connection state - starts in AwaitingHandshake
     let state = Arc::new(RwLock::new(ConnectionState::default()));

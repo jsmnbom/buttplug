@@ -107,7 +107,7 @@ impl ButtplugClientDevice {
       "Creating client device {} with index {} and messages {:?}.",
       name, index, device_features
     );
-    let (event_sender, _) = broadcast::channel(256);
+    let (event_sender, _) = broadcast::channel(16);
     let device_connected = Arc::new(AtomicBool::new(true));
     let client_connected = Arc::new(AtomicBool::new(true));
 
