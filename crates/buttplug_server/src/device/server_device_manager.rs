@@ -135,8 +135,8 @@ impl ServerDeviceManagerBuilder {
   }
 
   pub fn finish(&mut self) -> Result<ServerDeviceManager, ButtplugServerError> {
-    let (device_command_sender, device_command_receiver) = mpsc::channel(256);
-    let (device_event_sender, device_event_receiver) = mpsc::channel(256);
+    let (device_command_sender, device_command_receiver) = mpsc::channel(16);
+    let (device_event_sender, device_event_receiver) = mpsc::channel(16);
     let mut comm_managers: Vec<Box<dyn HardwareCommunicationManager>> = Vec::new();
     for builder in &mut self.comm_managers {
       let comm_mgr = builder.finish(device_event_sender.clone());
@@ -183,9 +183,9 @@ impl ServerDeviceManagerBuilder {
     let devices = Arc::new(DashMap::new());
     let loop_cancellation_token = CancellationToken::new();
 
-    let output_sender = broadcast::channel(255).0;
+    let output_sender = broadcast::channel(16).0;
     let output_observation_sender = if self.emit_output_observations {
-      Some(broadcast::channel(256).0)
+      Some(broadcast::channel(16).0)
     } else {
       None
     };

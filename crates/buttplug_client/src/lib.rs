@@ -264,8 +264,8 @@ pub struct ButtplugClient {
 
 impl ButtplugClient {
   pub fn new(name: &str) -> Self {
-    let (request_sender, request_receiver) = mpsc::channel(256);
-    let (event_stream, _) = broadcast::channel(256);
+    let (request_sender, request_receiver) = mpsc::channel(16);
+    let (event_stream, _) = broadcast::channel(16);
     let connected = Arc::new(AtomicBool::new(false));
     Self {
       client_name: name.to_owned(),
@@ -303,7 +303,7 @@ impl ButtplugClient {
     )?;
 
     info!("Connecting to server.");
-    let (connector_sender, connector_receiver) = mpsc::channel(256);
+    let (connector_sender, connector_receiver) = mpsc::channel(16);
     connector.connect(connector_sender).await.map_err(|e| {
       error!("Connection to server failed: {:?}", e);
       ButtplugClientError::from(e)
