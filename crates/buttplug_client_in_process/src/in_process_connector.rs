@@ -27,7 +27,7 @@ use std::sync::{
   Arc,
   atomic::{AtomicBool, Ordering},
 };
-use tokio::sync::mpsc::{Sender, channel};
+use tokio::sync::mpsc::Sender;
 
 #[derive(Default)]
 pub struct ButtplugInProcessClientConnectorBuilder {
@@ -70,7 +70,7 @@ impl ButtplugInProcessClientConnectorBuilder {
 pub struct ButtplugInProcessClientConnector {
   /// Internal server object for the embedded connector.
   server: Arc<ButtplugServer>,
-  server_outbound_sender: Sender<ButtplugServerMessageV4>,
+  server_outbound_sender: Option<Sender<ButtplugServerMessageV4>>,
   connected: Arc<AtomicBool>,
 }
 
@@ -87,10 +87,8 @@ impl ButtplugInProcessClientConnector {
   /// Takes the server's name and the ping time it should use, with a ping time
   /// of 0 meaning infinite ping.
   fn new(server: Option<ButtplugServer>) -> Self {
-    // Create a dummy channel, will just be overwritten on connect.
-    let (server_outbound_sender, _) = channel(256);
     Self {
-      server_outbound_sender,
+      server_outbound_sender: None,
       server: Arc::new(server.unwrap_or_else(|| {
         ButtplugServerBuilder::default()
           .finish()
@@ -111,7 +109,7 @@ impl ButtplugConnector<ButtplugClientMessageV4, ButtplugServerMessageV4>
     if !self.connected.load(Ordering::Relaxed) {
       let connected = self.connected.clone();
       let send = message_sender.clone();
-      self.server_outbound_sender = message_sender;
+      self.server_outbound_sender = Some(message_sender);
       let server_recv = self.server.server_version_event_stream();
       async move {
         buttplug_core::spawn!("InProcessClientConnector event sender loop", async move {
@@ -181,6 +179,7 @@ impl ButtplugConnector<ButtplugClientMessageV4, ButtplugServerMessageV4>
         }
       };
       sender
+        .expect("In-process connector should always have a sender after connection.")
         .send(output)
         .await
         .map_err(|_| ButtplugConnectorError::ConnectorNotConnected)
