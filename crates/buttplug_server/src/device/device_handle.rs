@@ -631,7 +631,7 @@ pub(super) async fn build_device_handle(
 
   // Create the hardware command channel and spawn the device task
   let task_group = TaskGroup::new();
-  let (internal_hw_msg_sender, internal_hw_msg_recv) = channel::<DeviceTaskMessage>(1024);
+  let (internal_hw_msg_sender, internal_hw_msg_recv) = channel::<DeviceTaskMessage>(128);
 
   let device_wait_duration = if let Some(gap) = definition.message_gap_ms() {
     Some(Duration::from_millis(gap as u64))
