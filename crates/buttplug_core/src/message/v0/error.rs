@@ -45,7 +45,7 @@ pub struct ErrorV0 {
   #[serde(rename = "ErrorMessage")]
   #[getset(get = "pub")]
   error_message: String,
-  #[serde(skip)]
+  // #[serde(skip)]
   original_error: Option<ButtplugError>,
 }
 
@@ -84,16 +84,8 @@ impl ErrorV0 {
     }
   }
 
-  pub fn original_error(&self) -> ButtplugError {
-    if let Some(ref original_error) = self.original_error {
-      original_error.clone()
-    } else {
-      // Try deserializing what's in the error_message field
-      if let Ok(deserialized_msg) = serde_json::from_str(&self.error_message) {
-        return deserialized_msg;
-      }
-      ButtplugError::from(self.clone())
-    }
+  pub fn original_error(&self) -> Option<ButtplugError> {
+    self.original_error.clone()
   }
 }
 
@@ -110,7 +102,8 @@ impl From<ButtplugError> for ErrorV0 {
     };
     // SAFETY: ButtplugError derives Serialize and contains only serializable fields.
     // Serialization failure would indicate a bug in the type definition, not a runtime condition.
-    let msg = serde_json::to_string(&error).expect("ButtplugError derives Serialize");
+    // let msg = serde_json::to_string(&error).expect("ButtplugError derives Serialize");
+    let msg = format!("{:?}", error);
     ErrorV0::new(code, &msg, Some(error))
   }
 }
