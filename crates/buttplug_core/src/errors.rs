@@ -206,6 +206,11 @@ pub enum ButtplugError {
 impl From<message::ErrorV0> for ButtplugError {
   /// Turns a Buttplug Protocol Error Message [super::messages::Error] into a [ButtplugError] type.
   fn from(error: message::ErrorV0) -> Self {
+    // Prefer the typed original error when available (e.g. in-process connector,
+    // where messages are never serialized and the field is preserved).
+    if let Some(original) = error.original_error() {
+      return original;
+    }
     match error.error_code() {
       ErrorCode::ErrorDevice => {
         ButtplugDeviceError::UntypedDeserializedError(error.error_message().clone()).into()

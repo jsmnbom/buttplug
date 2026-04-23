@@ -93,7 +93,7 @@ impl ClientMessageSorter {
           error!("Message not valid: {:?} - Error: {}", msg, e);
           let _ = sender.send(Err(ButtplugClientError::ButtplugError(e.into())));
         } else if let ButtplugServerMessageV4::Error(e) = msg {
-          let _ = sender.send(Err(e.original_error().into()));
+          let _ = sender.send(Err(ButtplugClientError::ButtplugError(e.clone().into())));
         } else {
           let _ = sender.send(Ok(msg.clone()));
         }
