@@ -316,6 +316,27 @@ impl ServerDeviceManager {
     })
   }
 
+  pub fn disconnect_device(&self, index: u32) -> ButtplugServerResultFuture {
+    let devices = self.devices.clone();
+    async move {
+      // Clone the handle and drop the Ref guard *before* awaiting disconnect.
+      // Holding a DashMap Ref across an await point keeps the shard read-locked,
+      // which deadlocks the device manager event loop when it tries to
+      // write-lock the same shard to remove the entry on disconnect.
+      let device = match devices.get(&index) {
+        Some(d) => d.clone(),
+        None => return Err(ButtplugDeviceError::DeviceNotAvailable(index).into()),
+      };
+      // Ref is dropped here; the shard is now unlocked for the event loop.
+      if let Err(e) = device.disconnect().await {
+        log::error!("Error disconnecting device {}: {:?}", index, e);
+        return Err(e.into());
+      }
+      Ok(message::OkV0::default().into())
+    }
+    .boxed()
+  }
+
   // Only a ButtplugServer should be able to call this. We don't want to expose this capability to
   // the outside world. Note that this could cause issues for lifetimes if someone holds this longer
   // than the lifetime of the server that originally created it. Ideally we should lock the Server
