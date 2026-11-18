@@ -17,10 +17,17 @@
 //! decoding a device reply with the trimmed types still works; it just yields no payload.
 //!
 //! To use another request in the protocol, add its name to `REQUESTS`.
+//!
+//! Also filters the protocols that get linked in, see `filter_protocols`.
 
 use std::{env, fmt::Write, fs, path::Path};
 
 const SOURCE: &str = "src/device/protocol_impl/thehandy_v3/hdy_rpc.rs";
+
+const PROTOCOLS_DIR: &str = "src/device/protocol_impl";
+/// Comma or whitespace separated protocol identifiers (as in the device configuration, e.g.
+/// `lovense, svakom-v2`) to keep. Unset keeps every protocol.
+const PROTOCOLS_ENV: &str = "BUTTPLUG_SERVER_PROTOCOLS";
 
 /// The `request::Params` variants (and their message structs) the protocol constructs.
 const REQUESTS: &[&str] = &[
@@ -33,6 +40,7 @@ const REQUESTS: &[&str] = &[
 
 fn main() {
   println!("cargo:rerun-if-changed=build.rs");
+  filter_protocols();
   println!("cargo:rerun-if-changed={SOURCE}");
 
   let source = fs::read_to_string(SOURCE).expect("generated Handy v3 protobuf code is readable");
@@ -157,4 +165,100 @@ fn with_tags(message: &str, oneof: &str, tags: &str) -> String {
       .find('"')
       .unwrap_or_else(|| panic!("`{marker}` in {SOURCE} has an unterminated tag list"));
   format!("{}{tags}{}", &message[..tags_start], &message[tags_end..])
+}
+
+/// With `BUTTPLUG_SERVER_PROTOCOLS` set, writes a copy of `get_protocol_identifier` (from
+/// `protocol_impl/mod.rs`) that only has the match arms of the protocols named there, and sets
+/// the cfg that makes `mod.rs` use it instead of its own.
+///
+/// Every protocol module is still compiled. The filtered-out ones are simply never referenced,
+/// which lets the linker drop them along with everything only they use.
+fn filter_protocols() {
+  println!("cargo:rustc-check-cfg=cfg(buttplug_server_protocols_filtered)");
+  println!("cargo:rerun-if-env-changed={PROTOCOLS_ENV}");
+  let Ok(wanted) = env::var(PROTOCOLS_ENV) else {
+    return;
+  };
+  let mut wanted = wanted
+    .split(|c: char| c == ',' || c.is_whitespace())
+    .filter(|identifier| !identifier.is_empty())
+    .collect::<Vec<_>>();
+
+  let registry = format!("{PROTOCOLS_DIR}/mod.rs");
+  println!("cargo:rerun-if-changed={registry}");
+  let source = fs::read_to_string(&registry).expect("protocol registry is readable");
+  let function = item(&source, "pub fn get_protocol_identifier(", &registry);
+
+  let mut out = String::from("// Filtered from protocol_impl/mod.rs by build.rs. Do not edit.\n");
+  let mut kept = 0;
+  for line in function.lines() {
+    // `item` also returns the attribute that disables the original in a filtered build.
+    if line.starts_with("#[cfg(") {
+      continue;
+    }
+    let module = line.trim().trim_end_matches(',');
+    let is_arm = line.trim().ends_with(',')
+      && module != "protocol_identifier"
+      && !module.is_empty()
+      && module
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == ':');
+    if is_arm {
+      let identifier = protocol_identifier(module);
+      match wanted.iter().position(|wanted| *wanted == identifier) {
+        Some(index) => {
+          wanted.swap_remove(index);
+          kept += 1;
+        }
+        None => continue,
+      }
+    }
+    writeln!(out, "{line}").unwrap();
+  }
+  assert!(kept > 0, "{PROTOCOLS_ENV} is set but keeps no protocol");
+  for identifier in wanted {
+    println!("cargo:warning={PROTOCOLS_ENV} names `{identifier}`, which is not a protocol");
+  }
+
+  let out_dir = env::var("OUT_DIR").expect("cargo sets OUT_DIR");
+  fs::write(Path::new(&out_dir).join("get_protocol_identifier.rs"), out)
+    .expect("filtered protocol lookup is writable");
+  println!("cargo:rustc-cfg=buttplug_server_protocols_filtered");
+}
+
+/// The protocol identifier a protocol module (as written in the match, e.g. `svakom::svakom_v2`)
+/// registers itself under, read from its source.
+fn protocol_identifier(module: &str) -> String {
+  let path = module.replace("::", "/");
+  let file = [
+    format!("{PROTOCOLS_DIR}/{path}.rs"),
+    format!("{PROTOCOLS_DIR}/{path}/mod.rs"),
+  ]
+  .into_iter()
+  .find(|file| Path::new(file).exists())
+  .unwrap_or_else(|| panic!("no source file for protocol module `{module}`"));
+  println!("cargo:rerun-if-changed={file}");
+  let source = fs::read_to_string(&file).expect("protocol source is readable");
+
+  // The identifier is the string literal in the module's one setup declaration: either one of the
+  // setup macros or a hand-written `IDENTIFIER` constant.
+  let mut identifiers = [
+    "generic_protocol_setup!(",
+    "generic_protocol_initializer_setup!(",
+    "pub const IDENTIFIER: &str =",
+  ]
+  .into_iter()
+  .flat_map(|declaration| source.match_indices(declaration).map(|(index, _)| index))
+  .filter_map(|index| {
+    let literal = source[index..].split_once('"')?.1;
+    Some(literal.split_once('"')?.0.to_owned())
+  });
+  let identifier = identifiers
+    .next()
+    .unwrap_or_else(|| panic!("{file} does not declare a protocol identifier"));
+  assert!(
+    identifiers.next().is_none(),
+    "{file} declares more than one protocol identifier"
+  );
+  identifier
 }

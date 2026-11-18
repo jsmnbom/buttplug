@@ -30,18 +30,12 @@ use uuid::{Uuid, uuid};
 const UMOVE_PROTOCOL_UUID: Uuid = uuid!("64afeb97-26ed-4c8e-b67a-5ae43dd2865d");
 
 pub mod setup {
-  use crate::device::protocol::{ProtocolIdentifier, ProtocolIdentifierFactory};
-  #[derive(Default)]
-  pub struct UmoveIdentifierFactory {}
+  use crate::device::protocol::ProtocolIdentifier;
 
-  impl ProtocolIdentifierFactory for UmoveIdentifierFactory {
-    fn identifier(&self) -> &str {
-      "umove"
-    }
+  pub const IDENTIFIER: &str = "umove";
 
-    fn create(&self) -> Box<dyn ProtocolIdentifier> {
-      Box::new(super::UmoveIdentifier::default())
-    }
+  pub fn create_identifier() -> Box<dyn ProtocolIdentifier> {
+    Box::new(super::UmoveIdentifier::default())
   }
 }
 

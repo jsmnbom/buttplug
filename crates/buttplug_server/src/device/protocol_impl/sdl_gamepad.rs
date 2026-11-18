@@ -20,23 +20,16 @@ use std::sync::{Arc, Mutex};
 
 use crate::device::{
   hardware::{Hardware, HardwareCommand, HardwareReadCmd, HardwareWriteCmd},
-  protocol::{ProtocolHandler, ProtocolIdentifier, ProtocolIdentifierFactory, ProtocolInitializer},
+  protocol::{ProtocolHandler, ProtocolIdentifier, ProtocolInitializer},
 };
 
 pub mod setup {
   use super::*;
 
-  #[derive(Default)]
-  pub struct SdlGamepadIdentifierFactory {}
+  pub const IDENTIFIER: &str = "sdl-gamepad";
 
-  impl ProtocolIdentifierFactory for SdlGamepadIdentifierFactory {
-    fn identifier(&self) -> &str {
-      "sdl-gamepad"
-    }
-
-    fn create(&self) -> Box<dyn ProtocolIdentifier> {
-      Box::new(SdlGamepadIdentifier::default())
-    }
+  pub fn create_identifier() -> Box<dyn ProtocolIdentifier> {
+    Box::new(SdlGamepadIdentifier::default())
   }
 }
 

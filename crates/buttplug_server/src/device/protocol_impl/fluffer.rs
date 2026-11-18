@@ -35,18 +35,12 @@ const FLUFFER_PROTOCOL_UUID: Uuid = uuid!("d3721a71-a81d-461a-b404-8599ce50c00b"
 const FLUFFER_KEY: [u8; 16] = *b"jdk#Flu%y6fer32f";
 
 pub mod setup {
-  use crate::device::protocol::{ProtocolIdentifier, ProtocolIdentifierFactory};
-  #[derive(Default)]
-  pub struct FlufferIdentifierFactory {}
+  use crate::device::protocol::ProtocolIdentifier;
 
-  impl ProtocolIdentifierFactory for FlufferIdentifierFactory {
-    fn identifier(&self) -> &str {
-      "fluffer"
-    }
+  pub const IDENTIFIER: &str = "fluffer";
 
-    fn create(&self) -> Box<dyn ProtocolIdentifier> {
-      Box::new(super::FlufferIdentifier::default())
-    }
+  pub fn create_identifier() -> Box<dyn ProtocolIdentifier> {
+    Box::new(super::FlufferIdentifier::default())
   }
 }
 
