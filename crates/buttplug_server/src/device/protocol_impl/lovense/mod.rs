@@ -36,7 +36,6 @@ use buttplug_server_device_config::{
   UserDeviceIdentifier,
 };
 use futures::{FutureExt, future::BoxFuture};
-use regex_lite::Regex;
 use std::{sync::Arc, time::Duration};
 use tokio::select;
 use uuid::{Uuid, uuid};
@@ -138,10 +137,9 @@ impl ProtocolIdentifier for LovenseIdentifier {
           count += 1;
           if count > LOVENSE_COMMAND_RETRY {
             warn!("Lovense Device timed out while getting DeviceType info. ({} retries)", LOVENSE_COMMAND_RETRY);
-            let re = Regex::new(r"LVS-([A-Z]+)\d+").expect("Static regex shouldn't fail");
-            if let Some(caps) = re.captures(hardware.name()) {
+            if let Some(device_type) = device_type_from_name(hardware.name()) {
               info!("Lovense Device identified by BLE name");
-              return Ok((UserDeviceIdentifier::new(hardware.address(), "lovense", &Some(caps[1].to_string())), Box::new(LovenseInitializer::new(caps[1].to_string()))));
+              return Ok((UserDeviceIdentifier::new(hardware.address(), "lovense", &Some(device_type.to_string())), Box::new(LovenseInitializer::new(device_type.to_string()))));
             };
             return Ok((UserDeviceIdentifier::new(hardware.address(), "lovense", &None), Box::new(LovenseInitializer::new("".to_string()))));
           }
@@ -150,6 +148,39 @@ impl ProtocolIdentifier for LovenseIdentifier {
     }
   }
 }
+
+/// Device type letters from a BLE name such as `LVS-Z001` (-> `Z`): what the regex
+/// `LVS-([A-Z]+)\d+` captures, without pulling in a regex engine.
+fn device_type_from_name(name: &str) -> Option<&str> {
+  name.match_indices("LVS-").find_map(|(start, prefix)| {
+    let rest = &name[start + prefix.len()..];
+    let letters = rest
+      .find(|c: char| !c.is_ascii_uppercase())
+      .unwrap_or(rest.len());
+    (letters > 0 && rest[letters..].starts_with(|c: char| c.is_ascii_digit()))
+      .then(|| &rest[..letters])
+  })
+}
+
+#[cfg(test)]
+mod name_tests {
+  use super::device_type_from_name;
+
+  #[test]
+  fn device_type_from_ble_name() {
+    assert_eq!(device_type_from_name("LVS-Z001"), Some("Z"));
+    assert_eq!(device_type_from_name("LVS-EA36"), Some("EA"));
+    assert_eq!(device_type_from_name("xxLVS-P12 "), Some("P"));
+    assert_eq!(device_type_from_name("LVS-LVS-B7"), Some("B"));
+    assert_eq!(device_type_from_name("LVS-Z"), None);
+    assert_eq!(device_type_from_name("LVS-001"), None);
+    assert_eq!(device_type_from_name("LVS-z001"), None);
+    assert_eq!(device_type_from_name("LVS-Z_001"), None);
+    assert_eq!(device_type_from_name("Hush"), None);
+    assert_eq!(device_type_from_name(""), None);
+  }
+}
+
 pub struct LovenseInitializer {
   device_type: String,
 }

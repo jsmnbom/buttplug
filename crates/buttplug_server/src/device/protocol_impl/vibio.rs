@@ -33,7 +33,6 @@ use uuid::{Uuid, uuid};
 
 use rand::RngExt;
 use rand::distr::Alphanumeric;
-use regex_lite::Regex;
 use sha2::{Digest, Sha256};
 
 type Aes128EcbEnc = ecb::Encryptor<Aes128>;
@@ -101,31 +100,21 @@ impl ProtocolInitializer for VibioInitializer {
           debug!("Vibio authenticated!");
           return Ok(Arc::new(Vibio::default()));
         }
-        let challenge = Regex::new(r"^([0-9A-Fa-f]{4}):([^;]+);$")
-          .expect("This is static and should always compile");
-        if let Some(parts) = challenge.captures(decoded.as_str()) {
-          debug!("Vibio challenge {:?}", parts);
-          if let Some(to_hash) = parts.get(2) {
-            debug!("Vibio to hash {:?}", to_hash);
-            let mut sha256 = Sha256::new();
-            sha256.update(to_hash.as_str().as_bytes());
-            let result = &sha256.finalize();
+        if let Some(to_hash) = challenge_payload(decoded.as_str()) {
+          debug!("Vibio to hash {:?}", to_hash);
+          let mut sha256 = Sha256::new();
+          sha256.update(to_hash.as_bytes());
+          let result = &sha256.finalize();
 
-            let auth_msg = format!("Auth:{:02x}{:02x};", result[0], result[1]);
-            hardware
-              .write_value(&HardwareWriteCmd::new(
-                &[VIBIO_PROTOCOL_UUID],
-                Endpoint::Tx,
-                encrypt(auth_msg),
-                false,
-              ))
-              .await?;
-          } else {
-            return Err(ButtplugDeviceError::ProtocolSpecificError(
-              "Vibio".to_owned(),
-              "Vibio didn't provide a valid security handshake".to_owned(),
-            ));
-          }
+          let auth_msg = format!("Auth:{:02x}{:02x};", result[0], result[1]);
+          hardware
+            .write_value(&HardwareWriteCmd::new(
+              &[VIBIO_PROTOCOL_UUID],
+              Endpoint::Tx,
+              encrypt(auth_msg),
+              false,
+            ))
+            .await?;
         } else {
           return Err(ButtplugDeviceError::ProtocolSpecificError(
             "Vibio".to_owned(),
@@ -169,5 +158,39 @@ impl ProtocolHandler for Vibio {
       )
       .into(),
     ])
+  }
+}
+
+/// The part to hash from a challenge such as `ab12:Xy9;` (-> `Xy9`): what the regex
+/// `^([0-9A-Fa-f]{4}):([^;]+);$` captures as its second group, without pulling in a regex engine.
+fn challenge_payload(challenge: &str) -> Option<&str> {
+  let (prefix, rest) = challenge.split_once(':')?;
+  let payload = rest.strip_suffix(';')?;
+  (prefix.len() == 4
+    && prefix.bytes().all(|b| b.is_ascii_hexdigit())
+    && !payload.is_empty()
+    && !payload.contains(';'))
+  .then_some(payload)
+}
+
+#[cfg(test)]
+mod challenge_tests {
+  use super::challenge_payload;
+
+  #[test]
+  fn payload_of_challenge() {
+    assert_eq!(challenge_payload("ab12:Xy9;"), Some("Xy9"));
+    assert_eq!(challenge_payload("0F0f:a;"), Some("a"));
+    assert_eq!(challenge_payload("ab12:Xy:9;"), Some("Xy:9"));
+    assert_eq!(challenge_payload("ab12:x y-z;"), Some("x y-z"));
+    assert_eq!(challenge_payload("ab1:Xy9;"), None);
+    assert_eq!(challenge_payload("ab123:Xy9;"), None);
+    assert_eq!(challenge_payload("abg2:Xy9;"), None);
+    assert_eq!(challenge_payload("ab12:;"), None);
+    assert_eq!(challenge_payload("ab12:Xy9"), None);
+    assert_eq!(challenge_payload("ab12:Xy9;;"), None);
+    assert_eq!(challenge_payload("ab12:X;y;"), None);
+    assert_eq!(challenge_payload(" ab12:Xy9;"), None);
+    assert_eq!(challenge_payload("OK;"), None);
   }
 }
