@@ -165,9 +165,34 @@ impl DeviceConfigurationManagerBuilder {
       base_device_definitions: attribute_tree_map,
       user_device_definitions: user_attribute_tree_map,
       simulated_devices_store: RwLock::new(self.simulated_devices.clone()),
+      base_source: None,
       //protocol_map,
     })
   }
+}
+
+/// Read-only source of base device configuration that does not live in the
+/// [DeviceConfigurationManager]'s own maps.
+///
+/// The default path loads the whole base configuration into `HashMap`s. That costs a lot of heap
+/// (every definition is resident, whether or not a matching device ever shows up), which is a
+/// problem on embedded targets. A source lets the base configuration stay wherever the
+/// implementor keeps it (for instance in flash, behind a generated index) and hand out owned
+/// values only for the entries that are actually asked for.
+pub trait BaseDeviceConfigSource: Send + Sync {
+  /// Returns every protocol with at least one communication specifier equal to `specifier`, as
+  /// `(protocol name, all specifiers of that protocol)`.
+  fn matching_communication_specifiers(
+    &self,
+    specifier: &ProtocolCommunicationSpecifier,
+  ) -> Vec<(String, Vec<ProtocolCommunicationSpecifier>)>;
+
+  /// Returns the base device definition for exactly this identifier, if there is one. Fallback
+  /// to the protocol default (identifier `None`) is done by the caller.
+  fn device_definition(
+    &self,
+    identifier: &BaseDeviceIdentifier,
+  ) -> Option<Arc<ServerDeviceDefinition>>;
 }
 
 /// Correlates information about protocols and which devices they support.
@@ -201,6 +226,9 @@ pub struct DeviceConfigurationManager {
   user_device_definitions: DashMap<UserDeviceIdentifier, ServerDeviceDefinition>,
   /// Simulated device configurations from the user config.
   simulated_devices_store: RwLock<Vec<SimulatedDeviceConfigEntry>>,
+  /// Additional source of base configuration, consulted after the base maps above.
+  #[getset(skip)]
+  base_source: Option<Arc<dyn BaseDeviceConfigSource>>,
 }
 
 impl Debug for DeviceConfigurationManager {
@@ -239,6 +267,7 @@ impl DeviceConfigurationManager {
       base_device_definitions,
       user_device_definitions: DashMap::new(),
       simulated_devices_store: RwLock::new(Vec::new()),
+      base_source: None,
     }
   }
 
@@ -306,6 +335,59 @@ impl DeviceConfigurationManager {
     self.user_device_definitions.retain(|identifier, _| {
       identifier.protocol() != "simulated" || identifier.address() != address
     });
+  }
+
+  /// Construct a `DeviceConfigurationManager` whose base configuration is served by `source`
+  /// instead of being held in the manager's own maps (which stay empty).
+  ///
+  /// Like [`DeviceConfigurationManager::new`], this skips the builder and its validation.
+  /// [`base_communication_specifiers`](Self::base_communication_specifiers) and
+  /// [`base_device_definitions`](Self::base_device_definitions) do not see the source's entries;
+  /// use [`matching_base_communication_specifiers`](Self::matching_base_communication_specifiers)
+  /// and [`device_definition`](Self::device_definition) instead.
+  pub fn with_base_source(source: Arc<dyn BaseDeviceConfigSource>) -> Self {
+    Self {
+      base_communication_specifiers: HashMap::new(),
+      user_communication_specifiers: DashMap::new(),
+      base_device_definitions: HashMap::new(),
+      user_device_definitions: DashMap::new(),
+      simulated_devices_store: RwLock::new(Vec::new()),
+      base_source: Some(source),
+    }
+  }
+
+  /// Returns every base protocol with at least one communication specifier equal to `specifier`,
+  /// as `(protocol name, all specifiers of that protocol)`.
+  pub fn matching_base_communication_specifiers(
+    &self,
+    specifier: &ProtocolCommunicationSpecifier,
+  ) -> Vec<(String, Vec<ProtocolCommunicationSpecifier>)> {
+    let mut matches: Vec<_> = self
+      .base_communication_specifiers
+      .iter()
+      .filter(|(_, specifiers)| specifiers.contains(specifier))
+      .map(|(name, specifiers)| (name.clone(), specifiers.clone()))
+      .collect();
+    if let Some(source) = &self.base_source {
+      matches.extend(source.matching_communication_specifiers(specifier));
+    }
+    matches
+  }
+
+  fn base_device_definition(
+    &self,
+    identifier: &BaseDeviceIdentifier,
+  ) -> Option<Arc<ServerDeviceDefinition>> {
+    self
+      .base_device_definitions
+      .get(identifier)
+      .cloned()
+      .or_else(|| {
+        self
+          .base_source
+          .as_ref()
+          .and_then(|source| source.device_definition(identifier))
+      })
   }
 
   pub fn add_user_communication_specifier(
@@ -432,17 +514,13 @@ impl DeviceConfigurationManager {
       )));
     }
     let base_key = BaseDeviceIdentifier::new(selection.protocol(), selection.base_identifier());
-    let base_definition = self
-      .base_device_definitions
-      .get(&base_key)
-      .ok_or_else(|| {
-        ButtplugDeviceConfigError::DeviceSelectionInvalid(format!(
-          "base definition {:?} not found for protocol '{}'",
-          base_key,
-          selection.protocol()
-        ))
-      })?
-      .clone();
+    let base_definition = self.base_device_definition(&base_key).ok_or_else(|| {
+      ButtplugDeviceConfigError::DeviceSelectionInvalid(format!(
+        "base definition {:?} not found for protocol '{}'",
+        base_key,
+        selection.protocol()
+      ))
+    })?;
 
     if let Some(old_definition) = self
       .user_device_definitions
@@ -502,7 +580,7 @@ impl DeviceConfigurationManager {
     let features = if let Some(definition) = self.user_device_definitions.get(identifier) {
       debug!("User device config found for {:?}", identifier);
       definition.clone()
-    } else if let Some(definition) = self.base_device_definitions.get(&BaseDeviceIdentifier::new(
+    } else if let Some(definition) = self.base_device_definition(&BaseDeviceIdentifier::new(
       identifier.protocol(),
       identifier.identifier(),
     )) {
@@ -510,19 +588,18 @@ impl DeviceConfigurationManager {
         "Protocol + Identifier device config found for {:?}, creating new user device from configuration",
         identifier
       );
-      let mut builder = ServerDeviceDefinitionBuilder::from_base(definition, Uuid::new_v4(), true);
+      let mut builder = ServerDeviceDefinitionBuilder::from_base(&definition, Uuid::new_v4(), true);
       builder.index(self.device_index(identifier));
       self.apply_simulated_display_name(&mut builder, identifier);
       builder.finish()
-    } else if let Some(definition) = self
-      .base_device_definitions
-      .get(&BaseDeviceIdentifier::new(identifier.protocol(), &None))
+    } else if let Some(definition) =
+      self.base_device_definition(&BaseDeviceIdentifier::new(identifier.protocol(), &None))
     {
       debug!(
         "Protocol device config found for {:?}, creating new user device from protocol defaults",
         identifier
       );
-      let mut builder = ServerDeviceDefinitionBuilder::from_base(definition, Uuid::new_v4(), true);
+      let mut builder = ServerDeviceDefinitionBuilder::from_base(&definition, Uuid::new_v4(), true);
       builder.index(self.device_index(identifier));
       self.apply_simulated_display_name(&mut builder, identifier);
       builder.finish()

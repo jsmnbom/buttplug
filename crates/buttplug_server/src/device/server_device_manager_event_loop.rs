@@ -25,7 +25,7 @@ use crate::device::{
   OutputObservation,
   device_handle::build_device_handle,
   hardware::communication::{HardwareCommunicationManager, HardwareCommunicationManagerEvent},
-  protocol::ProtocolManager,
+  protocol::get_protocol_specializers,
 };
 use dashmap::{DashMap, DashSet};
 use futures::{FutureExt, future};
@@ -85,8 +85,6 @@ pub(super) struct ServerDeviceManagerEventLoop {
   loop_cancellation_token: CancellationToken,
   /// Owner for device bring-up tasks accepted by this event loop.
   task_group: TaskGroup,
-  /// Protocol map, for mapping user definitions to protocols
-  protocol_manager: ProtocolManager,
   /// Optional sender for output observations, None when disabled
   output_observation_sender: Option<broadcast::Sender<OutputObservation>>,
 }
@@ -118,7 +116,6 @@ impl ServerDeviceManagerEventLoop {
       connecting_devices: Arc::new(DashSet::new()),
       loop_cancellation_token,
       task_group,
-      protocol_manager: ProtocolManager::default(),
       output_observation_sender,
     }
   }
@@ -279,10 +276,9 @@ impl ServerDeviceManagerEventLoop {
         //
         // We used to do this in build_server_device, but we shouldn't mark devices as actually
         // connecting until after this happens, so we're moving it back here.
-        let protocol_specializers = self.protocol_manager.protocol_specializers(
+        let protocol_specializers = get_protocol_specializers(
           &creator.specifier(),
-          self.device_config_manager.base_communication_specifiers(),
-          self.device_config_manager.user_communication_specifiers(),
+          &self.device_config_manager,
         );
 
         // If we have no identifiers, then there's nothing to do here. Throw an error.

@@ -24,18 +24,12 @@ use uuid::{Uuid, uuid};
 const HISMITH_PROTOCOL_UUID: Uuid = uuid!("e59f9c5d-bb4a-4a9c-ab57-0ceb43af1da7");
 
 pub mod setup {
-  use crate::device::protocol::{ProtocolIdentifier, ProtocolIdentifierFactory};
-  #[derive(Default)]
-  pub struct HismithIdentifierFactory {}
+  use crate::device::protocol::ProtocolIdentifier;
 
-  impl ProtocolIdentifierFactory for HismithIdentifierFactory {
-    fn identifier(&self) -> &str {
-      "hismith"
-    }
+  pub const IDENTIFIER: &str = "hismith";
 
-    fn create(&self) -> Box<dyn ProtocolIdentifier> {
-      Box::new(super::HismithIdentifier::default())
-    }
+  pub fn create_identifier() -> Box<dyn ProtocolIdentifier> {
+    Box::new(super::HismithIdentifier::default())
   }
 }
 

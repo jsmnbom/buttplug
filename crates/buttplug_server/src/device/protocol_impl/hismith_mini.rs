@@ -23,18 +23,12 @@ const HISMITH_MINI_PROTOCOL_UUID: Uuid = uuid!("94befc1a-9859-4bf6-99ee-5678c892
 const HISMITH_MINI_ROTATE_DIRECTIOM_UUID: Uuid = uuid!("94befc1a-9859-4bf6-99ee-5678c89237a7");
 
 pub mod setup {
-  use crate::device::protocol::{ProtocolIdentifier, ProtocolIdentifierFactory};
-  #[derive(Default)]
-  pub struct HismithMiniIdentifierFactory {}
+  use crate::device::protocol::ProtocolIdentifier;
 
-  impl ProtocolIdentifierFactory for HismithMiniIdentifierFactory {
-    fn identifier(&self) -> &str {
-      "hismith-mini"
-    }
+  pub const IDENTIFIER: &str = "hismith-mini";
 
-    fn create(&self) -> Box<dyn ProtocolIdentifier> {
-      Box::new(super::HismithMiniIdentifier::default())
-    }
+  pub fn create_identifier() -> Box<dyn ProtocolIdentifier> {
+    Box::new(super::HismithMiniIdentifier::default())
   }
 }
 
