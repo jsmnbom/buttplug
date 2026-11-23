@@ -12,7 +12,11 @@ use futures::{
 };
 use std::{
   future::Future,
-  sync::{Arc, Mutex},
+  sync::{
+    Arc,
+    Mutex,
+    atomic::{AtomicBool, Ordering},
+  },
 };
 use tracing::Span;
 
@@ -33,6 +37,20 @@ pub struct TaskGroupClosed;
 struct OwnedTask {
   abort_handle: AbortHandle,
   completion: TaskCompletion,
+  /// Set once the task's future is gone, see [`FinishedGuard`]
+  finished: Arc<AtomicBool>,
+}
+
+/// Held by a task's future, and marks the task finished when that future is dropped: when it
+/// completed, was cancelled, panicked, or the runtime dropped it unpolled. The group then lets
+/// go of the task at its next spawn, so a long-lived group that keeps spawning short tasks
+/// (the device manager's, one per device connection) does not grow for good.
+struct FinishedGuard(Arc<AtomicBool>);
+
+impl Drop for FinishedGuard {
+  fn drop(&mut self) {
+    self.0.store(true, Ordering::Release);
+  }
 }
 
 type ShutdownCompletion = Shared<BoxFuture<'static, Vec<TaskCompletionResult>>>;
@@ -78,6 +96,7 @@ impl TaskGroup {
     (
       futures::future::AbortRegistration,
       oneshot::Sender<TaskCompletion>,
+      FinishedGuard,
     ),
     TaskGroupClosed,
   > {
@@ -89,7 +108,13 @@ impl TaskGroup {
     if state.closed {
       return Err(TaskGroupClosed);
     }
+    // Tasks that have finished have nothing left to abort or join. Their results are not
+    // reported by a later `shutdown`
+    state
+      .tasks
+      .retain(|task| !task.finished.load(Ordering::Acquire));
 
+    let finished = Arc::new(AtomicBool::new(false));
     let (abort_handle, abort_registration) = AbortHandle::new_pair();
     let (completion_sender, completion_receiver) = oneshot::channel::<TaskCompletion>();
     let completion = async move {
@@ -102,8 +127,9 @@ impl TaskGroup {
     state.tasks.push(OwnedTask {
       abort_handle,
       completion,
+      finished: finished.clone(),
     });
-    Ok((abort_registration, completion_sender))
+    Ok((abort_registration, completion_sender, FinishedGuard(finished)))
   }
 
   /// Spawn a task into this group, identified by `span`.
@@ -124,8 +150,9 @@ impl TaskGroup {
     F: FnOnce() -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
   {
-    let (abort_registration, completion_sender) = self.reserve()?;
+    let (abort_registration, completion_sender, finished) = self.reserve()?;
     let future = async move {
+      let _finished = finished;
       match Abortable::new(task(), abort_registration).await {
         Ok(()) => TaskCompletionResult::Completed,
         Err(_) => TaskCompletionResult::Cancelled,
@@ -145,8 +172,9 @@ impl TaskGroup {
     F: FnOnce() -> Fut + 'static,
     Fut: Future<Output = ()> + 'static,
   {
-    let (abort_registration, completion_sender) = self.reserve()?;
+    let (abort_registration, completion_sender, finished) = self.reserve()?;
     let future = async move {
+      let _finished = finished;
       match Abortable::new(task(), abort_registration).await {
         Ok(()) => TaskCompletionResult::Completed,
         Err(_) => TaskCompletionResult::Cancelled,
@@ -238,6 +266,33 @@ mod tests {
       vec![TaskCompletionResult::Cancelled]
     );
     dropped_receiver.await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn finished_tasks_are_dropped_at_the_next_spawn() {
+    let group = TaskGroup::new();
+    for _ in 0..100 {
+      group.spawn(crate::task_span!("short"), || async {}).unwrap();
+      // Only the task just spawned is held: the one before it had finished
+      let finished = {
+        let state = group.inner.state.lock().unwrap();
+        assert_eq!(state.tasks.len(), 1);
+        state.tasks[0].finished.clone()
+      };
+      while !finished.load(Ordering::Acquire) {
+        tokio::task::yield_now().await;
+      }
+    }
+    // A task still running is kept, and joined by shutdown
+    group
+      .spawn(crate::task_span!("pending"), || {
+        futures::future::pending::<()>()
+      })
+      .unwrap();
+    assert_eq!(
+      group.shutdown().await,
+      vec![TaskCompletionResult::Cancelled]
+    );
   }
 
   #[tokio::test]
