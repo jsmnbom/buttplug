@@ -6,6 +6,8 @@
 // for full license information.
 
 use crate::util::async_manager::{self, TaskCompletion, TaskCompletionResult};
+#[cfg(feature = "wasm")]
+use futures::future::LocalBoxFuture;
 use futures::{
   channel::oneshot,
   future::{AbortHandle, Abortable, BoxFuture, FutureExt, Shared},
@@ -144,6 +146,11 @@ impl TaskGroup {
   /// active subscriber's filter must accept the INFO-level callsite. Runtimes that read
   /// task names from span metadata must install a subscriber that enables these spans
   /// before spawning, or every task arrives with `metadata() == None`.
+  ///
+  /// `task` is still called inside the spawned task, but its future is boxed there by
+  /// [`start_boxed`], in a frame of its own: neither the spawner's stack nor the frames that poll
+  /// the task carry that future by value, and everything past `start_boxed` is compiled once
+  /// instead of per task type. The cost is one allocation per task.
   #[cfg(not(feature = "wasm"))]
   pub fn spawn<F, Fut>(&self, span: Span, task: F) -> Result<(), TaskGroupClosed>
   where
@@ -151,13 +158,11 @@ impl TaskGroup {
     Fut: Future<Output = ()> + Send + 'static,
   {
     let (abort_registration, completion_sender, finished) = self.reserve()?;
-    let future = async move {
+    let future = Box::pin(async move {
       let _finished = finished;
-      match Abortable::new(task(), abort_registration).await {
-        Ok(()) => TaskCompletionResult::Completed,
-        Err(_) => TaskCompletionResult::Cancelled,
-      }
-    };
+      let task: BoxFuture<'static, ()> = start_boxed(task);
+      run_owned(task, abort_registration).await
+    });
     let completion = async_manager::spawn_with_result(future, span);
     let _ = completion_sender.send(completion);
     Ok(())
@@ -173,13 +178,11 @@ impl TaskGroup {
     Fut: Future<Output = ()> + 'static,
   {
     let (abort_registration, completion_sender, finished) = self.reserve()?;
-    let future = async move {
+    let future = Box::pin(async move {
       let _finished = finished;
-      match Abortable::new(task(), abort_registration).await {
-        Ok(()) => TaskCompletionResult::Completed,
-        Err(_) => TaskCompletionResult::Cancelled,
-      }
-    };
+      let task: LocalBoxFuture<'static, ()> = start_boxed_local(task);
+      run_owned_local(task, abort_registration).await
+    });
     let completion = async_manager::spawn_with_result(future, span);
     let _ = completion_sender.send(completion);
     Ok(())
@@ -223,6 +226,50 @@ impl TaskGroup {
     };
 
     shutdown.await
+  }
+}
+
+/// Calls a task's closure and boxes its future. Not inlined, so the future's by-value temporary
+/// lives only in this frame, which is gone before the task is first polled.
+#[cfg(not(feature = "wasm"))]
+#[inline(never)]
+fn start_boxed<F, Fut>(task: F) -> BoxFuture<'static, ()>
+where
+  F: FnOnce() -> Fut,
+  Fut: Future<Output = ()> + Send + 'static,
+{
+  Box::pin(task())
+}
+
+#[cfg(feature = "wasm")]
+#[inline(never)]
+fn start_boxed_local<F, Fut>(task: F) -> LocalBoxFuture<'static, ()>
+where
+  F: FnOnce() -> Fut,
+  Fut: Future<Output = ()> + 'static,
+{
+  Box::pin(task())
+}
+
+#[cfg(not(feature = "wasm"))]
+async fn run_owned(
+  task: BoxFuture<'static, ()>,
+  abort_registration: futures::future::AbortRegistration,
+) -> TaskCompletionResult {
+  match Abortable::new(task, abort_registration).await {
+    Ok(()) => TaskCompletionResult::Completed,
+    Err(_) => TaskCompletionResult::Cancelled,
+  }
+}
+
+#[cfg(feature = "wasm")]
+async fn run_owned_local(
+  task: LocalBoxFuture<'static, ()>,
+  abort_registration: futures::future::AbortRegistration,
+) -> TaskCompletionResult {
+  match Abortable::new(task, abort_registration).await {
+    Ok(()) => TaskCompletionResult::Completed,
+    Err(_) => TaskCompletionResult::Cancelled,
   }
 }
 
