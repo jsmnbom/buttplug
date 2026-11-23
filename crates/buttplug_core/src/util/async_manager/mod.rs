@@ -6,6 +6,8 @@
 // for full license information.
 
 use futures::future::BoxFuture;
+#[cfg(feature = "wasm")]
+use futures::future::LocalBoxFuture;
 #[cfg(not(feature = "wasm"))]
 use futures::task::FutureObj;
 #[cfg(feature = "wasm")]
@@ -106,51 +108,68 @@ pub trait AsyncManager: std::fmt::Debug + Send + Sync {
 /// Spawn a fire-and-forget task on the global async manager.
 ///
 /// Prefer the [`spawn!`][crate::spawn] macro for ergonomic use with a task name.
+///
+/// The future is boxed here, before anything else wraps it, so that only this line is generic
+/// over `F`: the wrapper and the hand-off to the runtime are compiled once, and a large future
+/// is not carried by value through their frames (which costs stack on runtimes where every
+/// task has its own fixed-size stack).
 #[cfg(not(feature = "wasm"))]
 pub fn spawn<F>(future: F, span: Span) -> TaskCompletion
 where
   F: Future<Output = ()> + Send + 'static,
 {
+  spawn_boxed(Box::pin(future), span)
+}
+
+#[cfg(not(feature = "wasm"))]
+fn spawn_boxed(future: BoxFuture<'static, ()>, span: Span) -> TaskCompletion {
   spawn_with_result(
-    async move {
+    Box::pin(async move {
       future.await;
       TaskCompletionResult::Completed
-    },
+    }),
     span,
   )
 }
 
 #[cfg(not(feature = "wasm"))]
-pub(crate) fn spawn_with_result<F>(future: F, span: Span) -> TaskCompletion
-where
-  F: Future<Output = TaskCompletionResult> + Send + 'static,
-{
-  get_global_async_manager().spawn(FutureObj::new(Box::new(future)), span)
+pub(crate) fn spawn_with_result(
+  future: BoxFuture<'static, TaskCompletionResult>,
+  span: Span,
+) -> TaskCompletion {
+  get_global_async_manager().spawn(FutureObj::new(future), span)
 }
 
 /// Spawn a fire-and-forget task on the global async manager (WASM, no Send required).
 ///
 /// Prefer the [`spawn!`][crate::spawn] macro for ergonomic use with a task name.
+///
+/// See the non-WASM variant for why the future is boxed first.
 #[cfg(feature = "wasm")]
 pub fn spawn<F>(future: F, span: Span) -> TaskCompletion
 where
   F: Future<Output = ()> + 'static,
 {
+  spawn_boxed(Box::pin(future), span)
+}
+
+#[cfg(feature = "wasm")]
+fn spawn_boxed(future: LocalBoxFuture<'static, ()>, span: Span) -> TaskCompletion {
   spawn_with_result(
-    async move {
+    Box::pin(async move {
       future.await;
       TaskCompletionResult::Completed
-    },
+    }),
     span,
   )
 }
 
 #[cfg(feature = "wasm")]
-pub(crate) fn spawn_with_result<F>(future: F, span: Span) -> TaskCompletion
-where
-  F: Future<Output = TaskCompletionResult> + 'static,
-{
-  get_global_async_manager().spawn(LocalFutureObj::new(Box::new(future)), span)
+pub(crate) fn spawn_with_result(
+  future: LocalBoxFuture<'static, TaskCompletionResult>,
+  span: Span,
+) -> TaskCompletion {
+  get_global_async_manager().spawn(LocalFutureObj::new(future), span)
 }
 
 /// Sleep for the given duration using the global async manager.
