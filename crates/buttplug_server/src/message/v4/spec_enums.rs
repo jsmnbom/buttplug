@@ -227,11 +227,21 @@ impl TryFromClientMessage<ButtplugClientMessageVariant> for ButtplugCheckedClien
   ) -> Result<Self, buttplug_core::errors::ButtplugError> {
     let id = msg.id();
     let mut converted_msg = match msg {
+      #[cfg(feature = "legacy-specs")]
       ButtplugClientMessageVariant::V0(m) => Self::try_from_client_message(m, features),
+      #[cfg(feature = "legacy-specs")]
       ButtplugClientMessageVariant::V1(m) => Self::try_from_client_message(m, features),
+      #[cfg(feature = "legacy-specs")]
       ButtplugClientMessageVariant::V2(m) => Self::try_from_client_message(m, features),
+      #[cfg(feature = "legacy-specs")]
       ButtplugClientMessageVariant::V3(m) => Self::try_from_client_message(m, features),
       ButtplugClientMessageVariant::V4(m) => Self::try_from_client_message(m, features),
+      #[cfg(not(feature = "legacy-specs"))]
+      _ => Err(ButtplugError::from(
+        ButtplugMessageError::MessageConversionError(
+          "This server is built without message spec versions 0 to 3".to_owned(),
+        ),
+      )),
     }?;
     // Always make sure the ID is set after conversion
     converted_msg.set_id(id);

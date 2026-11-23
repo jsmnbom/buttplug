@@ -23,10 +23,14 @@ doc = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default=["tokio-runtime", "builtin-protocols"]
+default=["tokio-runtime", "builtin-protocols", "legacy-specs"]
 # Compile the lookup over every protocol (`get_protocol_identifier`) and use it when the device
 # manager is not given one. Without it, `ServerDeviceManagerBuilder::protocol_lookup` must be set.
 builtin-protocols=[]
+# Message spec versions 0 to 3: clients that speak them are answered in their version. Without it
+# only spec version 4 is spoken, older messages get an error, and the conversion code (a few
+# hundred functions) is not in the binary.
+legacy-specs=[]
 tokio-runtime=["buttplug_core/tokio-runtime"]
 wasm=["buttplug_core/wasm", "uuid/js", "instant/wasm-bindgen"]
 
