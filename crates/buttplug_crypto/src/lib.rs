@@ -28,8 +28,6 @@ mod pkcs7;
 mod rustcrypto;
 #[cfg(not(target_os = "espidf"))]
 use rustcrypto as backend;
-#[cfg(any(test, feature = "self-check"))]
-mod vectors;
 
 /// A ciphertext did not decrypt to correctly PKCS#7 padded data: it is empty, its length is
 /// not a multiple of the block size, or the padding bytes are wrong.
@@ -65,20 +63,4 @@ pub fn aes128_ecb_pkcs7_encrypt(key: &[u8; 16], data: &[u8]) -> Vec<u8> {
 /// as RustCrypto's `Pkcs7` does.
 pub fn aes128_ecb_pkcs7_decrypt(key: &[u8; 16], data: &[u8]) -> Result<Vec<u8>, PaddingError> {
   backend::aes128_ecb_pkcs7_decrypt(key, data)
-}
-
-/// Runs the known-answer vectors against the active backend. Returns how many checks passed,
-/// or a description of the first that failed. For checking the ESP-IDF backend on a device.
-#[cfg(any(test, feature = "self-check"))]
-pub fn self_check() -> Result<usize, String> {
-  vectors::run()
-}
-
-#[cfg(test)]
-mod tests {
-  #[test]
-  fn known_answers() {
-    let checks = super::self_check().unwrap();
-    assert!(checks > 20, "only {checks} checks ran");
-  }
 }

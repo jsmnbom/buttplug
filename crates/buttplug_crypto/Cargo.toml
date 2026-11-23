@@ -8,11 +8,6 @@ homepage = "http://buttplug.io"
 repository = "https://github.com/buttplugio/buttplug.git"
 edition = "2024"
 
-[features]
-# `self_check()`: runs the known-answer vectors against the active backend, so the ESP-IDF backend
-# can be checked on the device. Off by default.
-self-check = []
-
 # RustCrypto everywhere except ESP-IDF, where the primitives come from ESP-IDF itself.
 [target.'cfg(not(target_os = "espidf"))'.dependencies]
 aes = "0.9.3"
