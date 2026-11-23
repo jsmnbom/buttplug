@@ -14,7 +14,6 @@ use crate::device::{
     generic_protocol_initializer_setup,
   },
 };
-use aes::Aes128;
 use async_trait::async_trait;
 use buttplug_core::errors::ButtplugDeviceError;
 use buttplug_server_device_config::Endpoint;
@@ -23,8 +22,6 @@ use buttplug_server_device_config::{
   ServerDeviceDefinition,
   UserDeviceIdentifier,
 };
-use ecb::cipher::block_padding::Pkcs7;
-use ecb::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyInit};
 use std::sync::{
   Arc,
   atomic::{AtomicU8, Ordering},
@@ -33,10 +30,6 @@ use uuid::{Uuid, uuid};
 
 use rand::RngExt;
 use rand::distr::Alphanumeric;
-use sha2::{Digest, Sha256};
-
-type Aes128EcbEnc = ecb::Encryptor<Aes128>;
-type Aes128EcbDec = ecb::Decryptor<Aes128>;
 
 const VIBCRAFTER_PROTOCOL_UUID: Uuid = uuid!("d3721a71-a81d-461a-b404-8599ce50c00b");
 const VIBCRAFTER_KEY: [u8; 16] = *b"jdk#Cra%f5Vib28r";
@@ -47,16 +40,16 @@ generic_protocol_initializer_setup!(VibCrafter, "vibcrafter");
 pub struct VibCrafterInitializer {}
 
 fn encrypt(command: String) -> Vec<u8> {
-  let enc = Aes128EcbEnc::new(&VIBCRAFTER_KEY.into());
-  let res = enc.encrypt_padded_vec::<Pkcs7>(command.as_bytes());
+  let res = buttplug_crypto::aes128_ecb_pkcs7_encrypt(&VIBCRAFTER_KEY, command.as_bytes());
 
   info!("Encoded {} to {:?}", command, res);
   res
 }
 
 fn decrypt(data: Vec<u8>) -> String {
-  let dec = Aes128EcbDec::new(&VIBCRAFTER_KEY.into());
-  let res = String::from_utf8(dec.decrypt_padded_vec::<Pkcs7>(&data).unwrap()).unwrap();
+  let res =
+    String::from_utf8(buttplug_crypto::aes128_ecb_pkcs7_decrypt(&VIBCRAFTER_KEY, &data).unwrap())
+      .unwrap();
 
   info!("Decoded {} from {:?}", res, data);
   res
@@ -102,9 +95,7 @@ impl ProtocolInitializer for VibCrafterInitializer {
         }
         if let Some(to_hash) = challenge_payload(decoded.as_str()) {
           debug!("VibCrafter to hash {:?}", to_hash);
-          let mut sha256 = Sha256::new();
-          sha256.update(to_hash.as_bytes());
-          let result = &sha256.finalize();
+          let result = buttplug_crypto::sha256(to_hash.as_bytes());
 
           let auth_msg = format!("Auth:{:02x}{:02x};", result[0], result[1]);
           hardware

@@ -1,0 +1,26 @@
+[package]
+name = "buttplug_crypto"
+version = "0.1.0"
+authors = ["Nonpolynomial Labs, LLC <kyle@nonpolynomial.com>"]
+description = "Buttplug Intimate Hardware Control Library - the few crypto primitives device protocols use"
+license = "BSD-3-Clause"
+homepage = "http://buttplug.io"
+repository = "https://github.com/buttplugio/buttplug.git"
+edition = "2024"
+
+[features]
+# `self_check()`: runs the known-answer vectors against the active backend, so the ESP-IDF backend
+# can be checked on the device. Off by default.
+self-check = []
+
+# RustCrypto everywhere except ESP-IDF, where the primitives come from ESP-IDF itself.
+[target.'cfg(not(target_os = "espidf"))'.dependencies]
+aes = "0.9.3"
+ecb = { version = "0.2.1", features = ["alloc"] }
+sha2 = "0.11.0"
+md-5 = "0.11.0"
+
+[target.'cfg(target_os = "espidf")'.dependencies]
+# Only for its bindings (correct layouts of `esp_aes_context` and `md5_context_t`); an ESP-IDF
+# firmware links esp-idf-sys already, so this adds nothing to it.
+esp-idf-sys = { version = ">=0.37, <0.39", default-features = false }

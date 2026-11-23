@@ -48,10 +48,9 @@ instant = "0.1.13"
 tokio-util = "0.7.19"
 prost = "0.14.4"
 paste = "1.0.15"
-aes = { version = "0.9.3" }
-ecb = { version = "0.2.1", features = ["alloc"] }
-sha2 = { version = "0.11.0" }
-md-5 = "0.11.0"
+# SHA-256, MD5 and AES-128-ECB for the protocols that need them: RustCrypto, or ESP-IDF's own on
+# ESP-IDF targets.
+buttplug_crypto = { version = "0.1.0", path = "../buttplug_crypto" }
 byteorder = "1.5.0"
 # Used by several packages, but we need to bring in the JS feature for wasm. Pinned at 0.8 until
 # dependencies update

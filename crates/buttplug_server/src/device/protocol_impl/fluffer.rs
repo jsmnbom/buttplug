@@ -9,7 +9,6 @@ use crate::device::{
   hardware::{Hardware, HardwareCommand, HardwareEvent, HardwareSubscribeCmd, HardwareWriteCmd},
   protocol::{ProtocolHandler, ProtocolIdentifier, ProtocolInitializer, ProtocolKeepaliveStrategy},
 };
-use aes::Aes128;
 use async_trait::async_trait;
 use buttplug_core::errors::ButtplugDeviceError;
 use buttplug_server_device_config::{
@@ -18,18 +17,12 @@ use buttplug_server_device_config::{
   ServerDeviceDefinition,
   UserDeviceIdentifier,
 };
-use ecb::cipher::block_padding::Pkcs7;
-use ecb::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyInit};
 use rand::random;
-use sha2::Digest;
 use std::sync::{
   Arc,
   atomic::{AtomicU8, Ordering},
 };
 use uuid::{Uuid, uuid};
-
-type Aes128EcbEnc = ecb::Encryptor<Aes128>;
-type Aes128EcbDec = ecb::Decryptor<Aes128>;
 
 const FLUFFER_PROTOCOL_UUID: Uuid = uuid!("d3721a71-a81d-461a-b404-8599ce50c00b");
 const FLUFFER_KEY: [u8; 16] = *b"jdk#Flu%y6fer32f";
@@ -97,16 +90,14 @@ impl FlufferInitializer {
 }
 
 fn encrypt(data: Vec<u8>) -> Vec<u8> {
-  let enc = Aes128EcbEnc::new(&FLUFFER_KEY.into());
-  let res = enc.encrypt_padded_vec::<Pkcs7>(&data);
+  let res = buttplug_crypto::aes128_ecb_pkcs7_encrypt(&FLUFFER_KEY, &data);
 
   info!("Encoded {:?} to {:?}", data, res);
   res
 }
 
 fn decrypt(data: Vec<u8>) -> Vec<u8> {
-  let dec = Aes128EcbDec::new(&FLUFFER_KEY.into());
-  let res = dec.decrypt_padded_vec::<Pkcs7>(&data).unwrap();
+  let res = buttplug_crypto::aes128_ecb_pkcs7_decrypt(&FLUFFER_KEY, &data).unwrap();
 
   info!("Decoded {:?} from {:?}", res, data);
   res
@@ -151,10 +142,9 @@ impl ProtocolInitializer for FlufferInitializer {
       let rand: [u8; 4] = [random(), random(), random(), random()];
 
       // sha256 of the 4 random bytes + the 4 advertisement bytes
-      let mut hash = sha2::Sha256::new();
-      Digest::update(&mut hash, rand);
-      Digest::update(&mut hash, adv4bytes);
-      let digest = hash.finalize().to_vec();
+      let mut to_hash = rand.to_vec();
+      to_hash.extend_from_slice(&adv4bytes);
+      let digest = buttplug_crypto::sha256(&to_hash);
 
       // first 4 bytes from sha256'd data (official app picks a random 4 adjacent bytes)
       let pattern = digest.get(0..4).expect("SHA256 has many bytes...");

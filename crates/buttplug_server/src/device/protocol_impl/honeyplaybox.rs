@@ -27,7 +27,6 @@ use buttplug_server_device_config::{
 };
 use futures::FutureExt;
 use futures_util::future::BoxFuture;
-use md5::{Digest, Md5};
 use std::time::Instant;
 use std::{
   sync::{
@@ -373,15 +372,16 @@ fn build_vibrate_data(random: &[u8], groups: &[VibrateGroup]) -> Result<Vec<u8>,
   let data_len: u16 = (data.len() as u16).saturating_add(8);
   let type_byte: u8 = 0xB1;
   let cmd_byte: u8 = 0x03;
-  let mut hasher = Md5::new();
-  hasher.update([type_byte]);
-  hasher.update([cmd_byte]);
-  hasher.update([(data_len >> 8) as u8]);
-  hasher.update([(data_len & 0xFF) as u8]);
-  hasher.update(&data);
-  hasher.update(SECRET);
-  hasher.update(random);
-  let digest = hasher.finalize();
+  let mut to_hash = vec![
+    type_byte,
+    cmd_byte,
+    (data_len >> 8) as u8,
+    (data_len & 0xFF) as u8,
+  ];
+  to_hash.extend_from_slice(&data);
+  to_hash.extend_from_slice(&SECRET);
+  to_hash.extend_from_slice(random);
+  let digest = buttplug_crypto::md5(&to_hash);
   let md58 = &digest[..8];
   let mut payload = data.clone();
   payload.extend_from_slice(md58);
@@ -552,5 +552,31 @@ impl FrameCollector {
       }
     }
     frames
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::{VibrateGroup, build_vibrate_data};
+
+  /// The signature is the first 8 bytes of MD5(header, data, secret, random); the expected
+  /// payload was computed independently with Python's `hashlib`.
+  #[test]
+  fn vibrate_data_is_signed() {
+    let group = VibrateGroup {
+      work_mode: 1,
+      motor_pos: 2,
+      time_100ms: 0x0102,
+      freq: 0x0304,
+      strength: 0x50,
+    };
+    let random = (0..16).collect::<Vec<u8>>();
+    assert_eq!(
+      build_vibrate_data(&random, &[group]).unwrap(),
+      [
+        0x21, 0x00, 0x05, 0x01, 0x02, 0x03, 0x04, 0x50, 0xef, 0x29, 0xa5, 0x42, 0x39, 0xfe, 0x67,
+        0x24
+      ]
+    );
   }
 }
