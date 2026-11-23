@@ -133,22 +133,38 @@ pub trait ProtocolInitializer: Sync + Send {
   ) -> Result<Arc<dyn ProtocolHandler>, ButtplugDeviceError>;
 }
 
-pub struct GenericProtocolIdentifier<T: ProtocolHandler + Default + 'static> {
+/// Identifier for protocols that are identified by their communication specifier alone, which
+/// is most of them.
+///
+/// Not generic over the protocol's types, so that `identify` and its future exist once and not
+/// once per protocol; only the constructor function differs.
+pub struct GenericProtocolIdentifier {
   protocol_identifier: &'static str,
-  marker: std::marker::PhantomData<T>,
+  new_initializer: fn() -> Box<dyn ProtocolInitializer>,
 }
 
-impl<T: ProtocolHandler + Default + 'static> GenericProtocolIdentifier<T> {
-  pub fn new(protocol_identifier: &'static str) -> Self {
+impl GenericProtocolIdentifier {
+  /// For a protocol without initialization: the handler is built with `Default`.
+  pub fn new<T: ProtocolHandler + Default + 'static>(protocol_identifier: &'static str) -> Self {
     Self {
       protocol_identifier,
-      marker: std::marker::PhantomData,
+      new_initializer: || Box::new(GenericProtocolInitializer::new(Arc::new(T::default()))),
+    }
+  }
+
+  /// For a protocol with its own initializer, built with `Default`.
+  pub fn with_initializer<T: ProtocolInitializer + Default + 'static>(
+    protocol_identifier: &'static str,
+  ) -> Self {
+    Self {
+      protocol_identifier,
+      new_initializer: || Box::new(T::default()),
     }
   }
 }
 
 #[async_trait]
-impl<T: ProtocolHandler + Default + 'static> ProtocolIdentifier for GenericProtocolIdentifier<T> {
+impl ProtocolIdentifier for GenericProtocolIdentifier {
   async fn identify(
     &mut self,
     hardware: Arc<Hardware>,
@@ -159,10 +175,7 @@ impl<T: ProtocolHandler + Default + 'static> ProtocolIdentifier for GenericProto
       self.protocol_identifier,
       &Some(hardware.name().to_owned()),
     );
-    Ok((
-      device_identifier,
-      Box::new(GenericProtocolInitializer::new(Arc::new(T::default()))),
-    ))
+    Ok((device_identifier, (self.new_initializer)()))
   }
 }
 
@@ -571,7 +584,7 @@ macro_rules! generic_protocol_setup {
       pub const IDENTIFIER: &str = $protocol_identifier;
 
       pub fn create_identifier() -> Box<dyn ProtocolIdentifier> {
-        Box::new(GenericProtocolIdentifier::<super::$protocol_name>::new(
+        Box::new(GenericProtocolIdentifier::new::<super::$protocol_name>(
           IDENTIFIER,
         ))
       }
@@ -593,26 +606,14 @@ macro_rules! generic_protocol_initializer_setup {
       };
 
       pub mod setup {
-        use $crate::device::protocol::ProtocolIdentifier;
+        use $crate::device::protocol::{GenericProtocolIdentifier, ProtocolIdentifier};
 
         pub const IDENTIFIER: &str = $protocol_identifier;
 
         pub fn create_identifier() -> Box<dyn ProtocolIdentifier> {
-          Box::new(super::[< $protocol_name Identifier >]::default())
-        }
-      }
-
-      #[derive(Default)]
-      pub struct [< $protocol_name Identifier >] {}
-
-      #[async_trait]
-      impl ProtocolIdentifier for [< $protocol_name Identifier >] {
-        async fn identify(
-          &mut self,
-          hardware: Arc<Hardware>,
-          _: ProtocolCommunicationSpecifier,
-        ) -> Result<(UserDeviceIdentifier, Box<dyn ProtocolInitializer>), ButtplugDeviceError> {
-          Ok((UserDeviceIdentifier::new(hardware.address(), $protocol_identifier, &Some(hardware.name().to_owned())), Box::new([< $protocol_name Initializer >]::default())))
+          Box::new(GenericProtocolIdentifier::with_initializer::<
+            super::[< $protocol_name Initializer >],
+          >(IDENTIFIER))
         }
       }
     }
