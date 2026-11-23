@@ -318,8 +318,14 @@ mod trimmed_schema_tests {
         full_message(1, Full::RequestBatteryGet(full::RequestBatteryGet {})),
       ),
       (
-        trimmed_message(2, Trimmed::RequestCapabilitiesGet(trimmed::RequestCapabilitiesGet {})),
-        full_message(2, Full::RequestCapabilitiesGet(full::RequestCapabilitiesGet {})),
+        trimmed_message(
+          2,
+          Trimmed::RequestCapabilitiesGet(trimmed::RequestCapabilitiesGet {}),
+        ),
+        full_message(
+          2,
+          Full::RequestCapabilitiesGet(full::RequestCapabilitiesGet {}),
+        ),
       ),
       (
         trimmed_message(
@@ -372,10 +378,13 @@ mod trimmed_schema_tests {
   fn replies_decode_without_their_payload() {
     let reply = full::RpcMessage {
       r#type: full::MessageType::Response as i32,
-      message: Some(full::rpc_message::Message::Response(full::Response::default())),
+      message: Some(full::rpc_message::Message::Response(
+        full::Response::default(),
+      )),
     }
     .encode_to_vec();
-    let decoded = trimmed::RpcMessage::decode(reply.as_slice()).expect("unknown fields are skipped");
+    let decoded =
+      trimmed::RpcMessage::decode(reply.as_slice()).expect("unknown fields are skipped");
     assert_eq!(decoded.r#type, trimmed::MessageType::Response as i32);
     assert_eq!(decoded.message, None);
   }
