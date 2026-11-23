@@ -20,13 +20,14 @@ doc = true
 
 
 [features]
-default = ["tokio-runtime", "btleplug-manager", "lovense-dongle-manager", "lovense-connect-service-manager", "serial-manager", "websocket-manager", "sdl-gamepad-manager"]
+default = ["tokio-runtime", "builtin-protocols", "btleplug-manager", "lovense-dongle-manager", "lovense-connect-service-manager", "serial-manager", "websocket-manager", "sdl-gamepad-manager"]
 btleplug-manager=["buttplug_server_hwmgr_btleplug"]
 lovense-dongle-manager=["buttplug_server_hwmgr_lovense_dongle"]
 lovense-connect-service-manager=["buttplug_server_hwmgr_lovense_connect"]
 serial-manager=["buttplug_server_hwmgr_serial"]
 websocket-manager=["buttplug_server_hwmgr_websocket"]
 sdl-gamepad-manager=["buttplug_server_hwmgr_sdl_gamepad"]
+builtin-protocols = ["buttplug_server/builtin-protocols"]
 tokio-runtime = ["buttplug_core/tokio-runtime", "buttplug_client/tokio-runtime", "buttplug_server/tokio-runtime"]
 wasm = ["buttplug_core/wasm", "buttplug_client/wasm", "buttplug_server/wasm"]
 

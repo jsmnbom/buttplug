@@ -5,6 +5,7 @@
 // Licensed under the BSD 3-Clause license. See LICENSE file in the project root
 // for full license information.
 
+#[cfg(feature = "builtin-protocols")]
 use crate::device::protocol::ProtocolIdentifier;
 
 // Utility mods
@@ -136,6 +137,7 @@ pub mod youcups;
 pub mod youou;
 pub mod zalo;
 
+#[cfg(feature = "builtin-protocols")]
 macro_rules! protocol_match {
   ( $var:ident, $( $( $protocol_module:ident )::+ ),* $(,)? ) => {
     match $var {
@@ -147,13 +149,16 @@ macro_rules! protocol_match {
   };
 }
 
-// With `BUTTPLUG_SERVER_PROTOCOLS` set at build time, `build.rs` compiles a copy of this function
-// in its place, keeping only the arms of the protocols named there. Protocols without an arm are
-// never referenced, so the linker drops them. Keep one protocol module per line.
-#[cfg(buttplug_server_protocols_filtered)]
-include!(concat!(env!("OUT_DIR"), "/get_protocol_identifier.rs"));
+// `protocol_factory!("<identifier>")`, one arm per protocol in the list below. `build.rs` reads
+// the list from this file, so it stays the only list of protocols: keep one module per line.
+include!(concat!(env!("OUT_DIR"), "/protocol_factory.rs"));
 
-#[cfg(not(buttplug_server_protocols_filtered))]
+/// The protocol identifier for a protocol name from the device configuration, over every
+/// protocol in this crate. The device manager uses it unless it is given another
+/// [`ProtocolLookup`](crate::device::protocol::ProtocolLookup); one that names only some
+/// protocols (built with [`protocol_factory!`](crate::protocol_factory)) lets the linker drop
+/// the rest.
+#[cfg(feature = "builtin-protocols")]
 pub fn get_protocol_identifier(protocol_identifier: &str) -> Option<Box<dyn ProtocolIdentifier>> {
   protocol_match!(
     protocol_identifier,

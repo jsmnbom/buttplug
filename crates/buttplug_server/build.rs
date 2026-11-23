@@ -18,16 +18,14 @@
 //!
 //! To use another request in the protocol, add its name to `REQUESTS`.
 //!
-//! Also filters the protocols that get linked in, see `filter_protocols`.
+//! Also generates the `protocol_factory!` macro and tells dependents which protocols exist, see
+//! `protocol_factory`.
 
 use std::{env, fmt::Write, fs, path::Path};
 
 const SOURCE: &str = "src/device/protocol_impl/thehandy_v3/hdy_rpc.rs";
 
 const PROTOCOLS_DIR: &str = "src/device/protocol_impl";
-/// Comma or whitespace separated protocol identifiers (as in the device configuration, e.g.
-/// `lovense, svakom-v2`) to keep. Unset keeps every protocol.
-const PROTOCOLS_ENV: &str = "BUTTPLUG_SERVER_PROTOCOLS";
 
 /// The `request::Params` variants (and their message structs) the protocol constructs.
 const REQUESTS: &[&str] = &[
@@ -40,7 +38,7 @@ const REQUESTS: &[&str] = &[
 
 fn main() {
   println!("cargo:rerun-if-changed=build.rs");
-  filter_protocols();
+  protocol_factory();
   println!("cargo:rerun-if-changed={SOURCE}");
 
   let source = fs::read_to_string(SOURCE).expect("generated Handy v3 protobuf code is readable");
@@ -51,7 +49,11 @@ fn main() {
   }
 
   let (params, tags) = keep_variants(item(&source, "pub mod request ", SOURCE), REQUESTS);
-  out.push_str(&with_tags(item(&source, "pub struct Request ", SOURCE), "request::Params", &tags));
+  out.push_str(&with_tags(
+    item(&source, "pub struct Request ", SOURCE),
+    "request::Params",
+    &tags,
+  ));
   out.push_str(&params);
 
   let (message, tags) = keep_variants(item(&source, "pub mod rpc_message ", SOURCE), &["Request"]);
@@ -143,7 +145,10 @@ fn keep_variants(module: &str, keep: &[&str]) -> (String, String) {
   }
 
   for name in keep {
-    assert!(found.contains(name), "variant `{name}` not found in {SOURCE}");
+    assert!(
+      found.contains(name),
+      "variant `{name}` not found in {SOURCE}"
+    );
   }
   (out, tags.join(", "))
 }
@@ -167,35 +172,21 @@ fn with_tags(message: &str, oneof: &str, tags: &str) -> String {
   format!("{}{tags}{}", &message[..tags_start], &message[tags_end..])
 }
 
-/// With `BUTTPLUG_SERVER_PROTOCOLS` set, writes a copy of `get_protocol_identifier` (from
-/// `protocol_impl/mod.rs`) that only has the match arms of the protocols named there, and sets
-/// the cfg that makes `mod.rs` use it instead of its own.
+/// Writes `protocol_factory.rs`, included by `protocol_impl/mod.rs`: the exported
+/// `protocol_factory!` macro with one arm per protocol, from the protocol list in
+/// `get_protocol_identifier` (the one list of protocols), plus a test that every arm's name is
+/// the module's `IDENTIFIER`.
 ///
-/// Every protocol module is still compiled. The filtered-out ones are simply never referenced,
-/// which lets the linker drop them along with everything only they use.
-fn filter_protocols() {
-  println!("cargo:rustc-check-cfg=cfg(buttplug_server_protocols_filtered)");
-  println!("cargo:rerun-if-env-changed={PROTOCOLS_ENV}");
-  let Ok(wanted) = env::var(PROTOCOLS_ENV) else {
-    return;
-  };
-  let mut wanted = wanted
-    .split(|c: char| c == ',' || c.is_whitespace())
-    .filter(|identifier| !identifier.is_empty())
-    .collect::<Vec<_>>();
-
+/// Also emits the protocol names, comma separated, as `links` metadata. A crate that depends on
+/// this one directly reads them in its build script as `DEP_BUTTPLUG_SERVER_PROTOCOLS`.
+fn protocol_factory() {
   let registry = format!("{PROTOCOLS_DIR}/mod.rs");
   println!("cargo:rerun-if-changed={registry}");
   let source = fs::read_to_string(&registry).expect("protocol registry is readable");
   let function = item(&source, "pub fn get_protocol_identifier(", &registry);
 
-  let mut out = String::from("// Filtered from protocol_impl/mod.rs by build.rs. Do not edit.\n");
-  let mut kept = 0;
+  let mut protocols = Vec::<(String, String)>::new();
   for line in function.lines() {
-    // `item` also returns the attribute that disables the original in a filtered build.
-    if line.starts_with("#[cfg(") {
-      continue;
-    }
     let module = line.trim().trim_end_matches(',');
     let is_arm = line.trim().ends_with(',')
       && module != "protocol_identifier"
@@ -204,26 +195,63 @@ fn filter_protocols() {
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == ':');
     if is_arm {
-      let identifier = protocol_identifier(module);
-      match wanted.iter().position(|wanted| *wanted == identifier) {
-        Some(index) => {
-          wanted.swap_remove(index);
-          kept += 1;
-        }
-        None => continue,
-      }
+      protocols.push((protocol_identifier(module), module.to_owned()));
     }
-    writeln!(out, "{line}").unwrap();
   }
-  assert!(kept > 0, "{PROTOCOLS_ENV} is set but keeps no protocol");
-  for identifier in wanted {
-    println!("cargo:warning={PROTOCOLS_ENV} names `{identifier}`, which is not a protocol");
+  assert!(!protocols.is_empty(), "no protocols found in {registry}");
+  protocols.sort();
+  for pair in protocols.windows(2) {
+    assert!(
+      pair[0].0 != pair[1].0,
+      "protocol `{}` is listed twice",
+      pair[0].0
+    );
   }
 
+  let mut out = String::from(
+    "// Generated by build.rs from the protocol list in protocol_impl/mod.rs. Do not edit.\n\n\
+     /// The [`ProtocolIdentifier`](crate::device::protocol::ProtocolIdentifier) of one protocol, by\n\
+     /// its name in the device configuration, e.g. `protocol_factory!(\"lovense\")`.\n\
+     ///\n\
+     /// Expands to that protocol's `create_identifier()` call and references no other protocol, so\n\
+     /// a [`ProtocolLookup`](crate::device::protocol::ProtocolLookup) built from it only links the\n\
+     /// protocols it names. An unknown name is a compile error.\n\
+     #[macro_export]\n\
+     macro_rules! protocol_factory {\n",
+  );
+  for (identifier, module) in &protocols {
+    writeln!(
+      out,
+      "  ({identifier:?}) => {{ $crate::device::protocol_impl::{module}::setup::create_identifier() }};"
+    )
+    .unwrap();
+  }
+  out.push_str(
+    "  ($other:literal) => {\n    \
+     ::core::compile_error!(::core::concat!(\"buttplug_server has no protocol named \", $other))\n  \
+     };\n}\n\n\
+     #[cfg(test)]\n\
+     #[test]\n\
+     fn protocol_factory_names_are_identifiers() {\n",
+  );
+  for (identifier, module) in &protocols {
+    writeln!(
+      out,
+      "  assert_eq!({module}::setup::IDENTIFIER, {identifier:?});"
+    )
+    .unwrap();
+  }
+  out.push_str("}\n");
+
   let out_dir = env::var("OUT_DIR").expect("cargo sets OUT_DIR");
-  fs::write(Path::new(&out_dir).join("get_protocol_identifier.rs"), out)
-    .expect("filtered protocol lookup is writable");
-  println!("cargo:rustc-cfg=buttplug_server_protocols_filtered");
+  fs::write(Path::new(&out_dir).join("protocol_factory.rs"), out)
+    .expect("protocol factory macro is writable");
+
+  let names = protocols
+    .iter()
+    .map(|(identifier, _)| identifier.as_str())
+    .collect::<Vec<_>>();
+  println!("cargo:protocols={}", names.join(","));
 }
 
 /// The protocol identifier a protocol module (as written in the match, e.g. `svakom::svakom_v2`)

@@ -21,10 +21,7 @@ use buttplug_server_device_config::{
 
 use super::hardware::HardwareWriteCmd;
 use crate::{
-  device::{
-    hardware::{Hardware, HardwareCommand, HardwareReadCmd},
-    protocol_impl::get_protocol_identifier,
-  },
+  device::hardware::{Hardware, HardwareCommand, HardwareReadCmd},
   message::{
     ButtplugServerDeviceMessage,
     checked_output_cmd::CheckedOutputCmdV4,
@@ -108,6 +105,15 @@ impl ProtocolSpecializer {
     self.identifier
   }
 }
+
+/// Finds the protocol implementation for a protocol name from the device configuration.
+///
+/// The device manager calls it for every protocol whose communication specifiers match a found
+/// device; see `ServerDeviceManagerBuilder::protocol_lookup`. With the `builtin-protocols`
+/// feature, [`get_protocol_identifier`](crate::device::protocol_impl::get_protocol_identifier)
+/// covers every protocol. A lookup that only names some protocols, each through
+/// [`protocol_factory!`](crate::protocol_factory), lets the linker drop all the others.
+pub type ProtocolLookup = fn(&str) -> Option<Box<dyn ProtocolIdentifier>>;
 
 #[async_trait]
 pub trait ProtocolIdentifier: Sync + Send {
@@ -519,6 +525,7 @@ pub use generic_protocol_setup;
 pub fn get_protocol_specializers(
   specifier: &ProtocolCommunicationSpecifier,
   device_config_manager: &DeviceConfigurationManager,
+  protocol_lookup: ProtocolLookup,
 ) -> Vec<ProtocolSpecializer> {
   debug!(
     "Looking for protocol that matches specifier: {:?}",
@@ -530,7 +537,7 @@ pub fn get_protocol_specializers(
       "Found protocol {:?} for user specifier {:?}.",
       name, specifier
     );
-    if let Some(identifier) = get_protocol_identifier(name) {
+    if let Some(identifier) = protocol_lookup(name) {
       specializers.push(ProtocolSpecializer::new(specifiers, identifier));
     } else {
       warn!(

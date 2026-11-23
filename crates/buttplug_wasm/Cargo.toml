@@ -17,7 +17,7 @@ path = "src/lib.rs"
 
 [dependencies]
 buttplug_core = { version = "11.0.1", path = "../buttplug_core", default-features = false, features = ["wasm"] }
-buttplug_server = { version = "12.0.0", path = "../buttplug_server", default-features = false, features = ["wasm"] }
+buttplug_server = { version = "12.0.0", path = "../buttplug_server", default-features = false, features = ["wasm", "builtin-protocols"] }
 buttplug_server_device_config = { version = "12.0.0", path = "../buttplug_server_device_config" }
 buttplug_server_hwmgr_webbluetooth = { version = "12.0.0", path = "../buttplug_server_hwmgr_webbluetooth" }
 console_error_panic_hook = "0.1.7"

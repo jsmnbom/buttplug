@@ -10,6 +10,9 @@ readme = "./README.md"
 keywords = ["usb", "serial", "hardware", "bluetooth", "teledildonics"]
 edition = "2024"
 exclude = ["examples/**"]
+# Not a native library: lets build.rs pass the implemented protocol names to dependents as
+# `DEP_BUTTPLUG_SERVER_PROTOCOLS`.
+links = "buttplug_server"
 
 [lib]
 name = "buttplug_server"
@@ -20,7 +23,10 @@ doc = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default=["tokio-runtime"]
+default=["tokio-runtime", "builtin-protocols"]
+# Compile the lookup over every protocol (`get_protocol_identifier`) and use it when the device
+# manager is not given one. Without it, `ServerDeviceManagerBuilder::protocol_lookup` must be set.
+builtin-protocols=[]
 tokio-runtime=["buttplug_core/tokio-runtime"]
 wasm=["buttplug_core/wasm", "uuid/js", "instant/wasm-bindgen"]
 
