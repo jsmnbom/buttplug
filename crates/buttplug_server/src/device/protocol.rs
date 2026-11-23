@@ -133,22 +133,38 @@ pub trait ProtocolInitializer: Sync + Send {
   ) -> Result<Arc<dyn ProtocolHandler>, ButtplugDeviceError>;
 }
 
-pub struct GenericProtocolIdentifier<T: ProtocolHandler + Default + 'static> {
+/// Identifier for protocols that are identified by their communication specifier alone, which
+/// is most of them.
+///
+/// Not generic over the protocol's types, so that `identify` and its future exist once and not
+/// once per protocol; only the constructor function differs.
+pub struct GenericProtocolIdentifier {
   protocol_identifier: &'static str,
-  marker: std::marker::PhantomData<T>,
+  new_initializer: fn() -> Box<dyn ProtocolInitializer>,
 }
 
-impl<T: ProtocolHandler + Default + 'static> GenericProtocolIdentifier<T> {
-  pub fn new(protocol_identifier: &'static str) -> Self {
+impl GenericProtocolIdentifier {
+  /// For a protocol without initialization: the handler is built with `Default`.
+  pub fn new<T: ProtocolHandler + Default + 'static>(protocol_identifier: &'static str) -> Self {
     Self {
       protocol_identifier,
-      marker: std::marker::PhantomData,
+      new_initializer: || Box::new(GenericProtocolInitializer::new(Arc::new(T::default()))),
+    }
+  }
+
+  /// For a protocol with its own initializer, built with `Default`.
+  pub fn with_initializer<T: ProtocolInitializer + Default + 'static>(
+    protocol_identifier: &'static str,
+  ) -> Self {
+    Self {
+      protocol_identifier,
+      new_initializer: || Box::new(T::default()),
     }
   }
 }
 
 #[async_trait]
-impl<T: ProtocolHandler + Default + 'static> ProtocolIdentifier for GenericProtocolIdentifier<T> {
+impl ProtocolIdentifier for GenericProtocolIdentifier {
   async fn identify(
     &mut self,
     hardware: Arc<Hardware>,
@@ -159,10 +175,7 @@ impl<T: ProtocolHandler + Default + 'static> ProtocolIdentifier for GenericProto
       self.protocol_identifier,
       &Some(hardware.name().to_owned()),
     );
-    Ok((
-      device_identifier,
-      Box::new(GenericProtocolInitializer::new(Arc::new(T::default()))),
-    ))
+    Ok((device_identifier, (self.new_initializer)()))
   }
 }
 
@@ -189,31 +202,211 @@ impl ProtocolInitializer for GenericProtocolInitializer {
   }
 }
 
-pub trait ProtocolHandler: Sync + Send {
+/// Gives the default methods of [ProtocolHandler] the handler as a trait object. Implemented for
+/// every handler.
+pub trait AsDynProtocolHandler {
+  fn as_dyn_protocol_handler(&self) -> &dyn ProtocolHandler;
+}
+
+impl<T: ProtocolHandler> AsDynProtocolHandler for T {
+  fn as_dyn_protocol_handler(&self) -> &dyn ProtocolHandler {
+    self
+  }
+}
+
+// The default methods of ProtocolHandler are compiled once per handler type, and every one of
+// them is kept for every handler through its vtable. Their bodies therefore live in the functions
+// below, which exist once, and the defaults only call them.
+
+// Allow here since this changes between debug/release
+#[allow(unused_variables)]
+#[inline(never)]
+fn command_unimplemented(command: &str) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
+  #[cfg(debug_assertions)]
+  unimplemented!("Command not implemented for this protocol");
+  #[cfg(not(debug_assertions))]
+  Err(ButtplugDeviceError::UnhandledCommand(format!(
+    "Command not implemented for this protocol: {}",
+    command
+  )))
+}
+
+/// The default of the per-actuator output handlers. Takes an index and not the name, and is never
+/// inlined: the callers exist once per handler type, so every byte in them counts 150 times.
+#[inline(never)]
+fn output_unimplemented(actuator: usize) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
+  const NAMES: [&str; 9] = [
+    "OutputCmd (Vibrate Actuator)",
+    "OutputCmd (Rotate Actuator)",
+    "OutputCmd (Oscillate Actuator)",
+    "OutputCmd (Spray Actuator)",
+    "OutputCmd (Constrict Actuator)",
+    "OutputCmd (Temperature Actuator)",
+    "OutputCmd (Led Actuator)",
+    "OutputCmd (Position Actuator)",
+    "OutputCmd (Position w/ Duration Actuator)",
+  ];
+  command_unimplemented(NAMES[actuator])
+}
+
+#[inline(never)]
+fn unhandled_future<T: Send + 'static>(
+  message: &'static str,
+) -> BoxFuture<'static, Result<T, ButtplugDeviceError>> {
+  future::ready(Err(ButtplugDeviceError::UnhandledCommand(
+    message.to_string(),
+  )))
+  .boxed()
+}
+
+/// The default of the input handlers that only refuse. Takes the hardware so that the callers,
+/// which exist once per handler type, do not each drop it themselves.
+#[inline(never)]
+fn input_unimplemented(
+  _device: Arc<Hardware>,
+  command: usize,
+) -> BoxFuture<'static, Result<(), ButtplugDeviceError>> {
+  const MESSAGES: [&str; 3] = [
+    "Command not implemented for this protocol: InputCmd (Subscribe)",
+    "Command not implemented for this protocol: InputCmd (Unsubscribe)",
+    "Command not implemented for this protocol: SensorReadCmd",
+  ];
+  unhandled_future(MESSAGES[command])
+}
+
+fn default_handle_output_cmd(
+  handler: &dyn ProtocolHandler,
+  cmd: &CheckedOutputCmdV4,
+) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
+  let output_command = cmd.output_command();
+  match output_command {
+    OutputCommand::Constrict(x) => handler.handle_output_constrict_cmd(
+      cmd.feature_index(),
+      cmd.feature_id(),
+      x.value()
+        .try_into()
+        .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
+    ),
+    OutputCommand::Spray(x) => handler.handle_output_spray_cmd(
+      cmd.feature_index(),
+      cmd.feature_id(),
+      x.value()
+        .try_into()
+        .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
+    ),
+    OutputCommand::Oscillate(x) => handler.handle_output_oscillate_cmd(
+      cmd.feature_index(),
+      cmd.feature_id(),
+      x.value()
+        .try_into()
+        .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
+    ),
+    OutputCommand::Rotate(x) => {
+      handler.handle_output_rotate_cmd(cmd.feature_index(), cmd.feature_id(), x.value())
+    }
+    OutputCommand::Vibrate(x) => handler.handle_output_vibrate_cmd(
+      cmd.feature_index(),
+      cmd.feature_id(),
+      x.value()
+        .try_into()
+        .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
+    ),
+    OutputCommand::Position(x) => handler.handle_output_position_cmd(
+      cmd.feature_index(),
+      cmd.feature_id(),
+      x.value()
+        .try_into()
+        .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
+    ),
+    OutputCommand::Temperature(x) => {
+      handler.handle_output_temperature_cmd(cmd.feature_index(), cmd.feature_id(), x.value())
+    }
+    OutputCommand::Led(x) => handler.handle_output_led_cmd(
+      cmd.feature_index(),
+      cmd.feature_id(),
+      x.value()
+        .try_into()
+        .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
+    ),
+    OutputCommand::HwPositionWithDuration(x) => handler.handle_hw_position_with_duration_cmd(
+      cmd.feature_index(),
+      cmd.feature_id(),
+      x.value(),
+      x.duration(),
+    ),
+  }
+}
+
+fn default_handle_input_read_cmd(
+  handler: &dyn ProtocolHandler,
+  device_index: u32,
+  device: Arc<Hardware>,
+  feature_index: u32,
+  feature_id: Uuid,
+  sensor_type: InputType,
+) -> BoxFuture<'_, Result<InputReadingV4, ButtplugDeviceError>> {
+  match sensor_type {
+    InputType::Battery => {
+      handler.handle_battery_level_cmd(device_index, device, feature_index, feature_id)
+    }
+    _ => unhandled_future("Command not implemented for this protocol: InputCmd (Read)"),
+  }
+}
+
+fn default_handle_battery_level_cmd(
+  device_index: u32,
+  device: Arc<Hardware>,
+  feature_index: u32,
+  feature_id: Uuid,
+) -> BoxFuture<'static, Result<InputReadingV4, ButtplugDeviceError>> {
+  // If we have a standardized BLE Battery endpoint, handle that above the
+  // protocol, as it'll always be the same.
+  if device.endpoints().contains(&Endpoint::RxBLEBattery) {
+    debug!("Trying to get battery reading.");
+    let msg = HardwareReadCmd::new(feature_id, Endpoint::RxBLEBattery, 1, 0);
+    let fut = device.read_value(&msg);
+    async move {
+      let hw_msg = fut.await?;
+      let battery_level = hw_msg.data()[0] as i32;
+      let battery_reading = InputReadingV4::new(
+        device_index,
+        feature_index,
+        buttplug_core::message::InputTypeReading::Battery(InputValue::new(battery_level as u8)),
+      );
+      debug!("Got battery reading: {}", battery_level);
+      Ok(battery_reading)
+    }
+    .boxed()
+  } else {
+    unhandled_future("Command not implemented for this protocol: SensorReadCmd")
+  }
+}
+
+pub trait ProtocolHandler: AsDynProtocolHandler + Sync + Send {
   fn keepalive_strategy(&self) -> ProtocolKeepaliveStrategy {
     ProtocolKeepaliveStrategy::HardwareRequiredRepeatLastPacketStrategy
   }
 
+  // Nothing calls handle_message or command_unimplemented through a trait object: `Self: Sized`
+  // keeps them out of the vtable, where each would be kept once per handler type.
   fn handle_message(
     &self,
     message: &ButtplugDeviceCommandMessageUnionV4,
-  ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented(print_type_of(&message))
+  ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError>
+  where
+    Self: Sized,
+  {
+    command_unimplemented(print_type_of(&message))
   }
 
-  // Allow here since this changes between debug/release
-  #[allow(unused_variables)]
   fn command_unimplemented(
     &self,
     command: &str,
-  ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    #[cfg(debug_assertions)]
-    unimplemented!("Command not implemented for this protocol");
-    #[cfg(not(debug_assertions))]
-    Err(ButtplugDeviceError::UnhandledCommand(format!(
-      "Command not implemented for this protocol: {}",
-      command
-    )))
+  ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError>
+  where
+    Self: Sized,
+  {
+    command_unimplemented(command)
   }
 
   // The default scalar handler assumes that most devices require discrete commands per feature. If
@@ -223,63 +416,7 @@ pub trait ProtocolHandler: Sync + Send {
     &self,
     cmd: &CheckedOutputCmdV4,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    let output_command = cmd.output_command();
-    match output_command {
-      OutputCommand::Constrict(x) => self.handle_output_constrict_cmd(
-        cmd.feature_index(),
-        cmd.feature_id(),
-        x.value()
-          .try_into()
-          .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
-      ),
-      OutputCommand::Spray(x) => self.handle_output_spray_cmd(
-        cmd.feature_index(),
-        cmd.feature_id(),
-        x.value()
-          .try_into()
-          .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
-      ),
-      OutputCommand::Oscillate(x) => self.handle_output_oscillate_cmd(
-        cmd.feature_index(),
-        cmd.feature_id(),
-        x.value()
-          .try_into()
-          .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
-      ),
-      OutputCommand::Rotate(x) => {
-        self.handle_output_rotate_cmd(cmd.feature_index(), cmd.feature_id(), x.value())
-      }
-      OutputCommand::Vibrate(x) => self.handle_output_vibrate_cmd(
-        cmd.feature_index(),
-        cmd.feature_id(),
-        x.value()
-          .try_into()
-          .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
-      ),
-      OutputCommand::Position(x) => self.handle_output_position_cmd(
-        cmd.feature_index(),
-        cmd.feature_id(),
-        x.value()
-          .try_into()
-          .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
-      ),
-      OutputCommand::Temperature(x) => {
-        self.handle_output_temperature_cmd(cmd.feature_index(), cmd.feature_id(), x.value())
-      }
-      OutputCommand::Led(x) => self.handle_output_led_cmd(
-        cmd.feature_index(),
-        cmd.feature_id(),
-        x.value()
-          .try_into()
-          .map_err(|_| ButtplugDeviceError::DeviceCommandSignError)?,
-      ),
-      OutputCommand::HwPositionWithDuration(x) => self.handle_hw_position_with_duration_cmd(
-        cmd.feature_index(),
-        cmd.feature_id(),
-        x.value(),
-        x.duration(),
-      ),
-    }
+    default_handle_output_cmd(self.as_dyn_protocol_handler(), cmd)
   }
 
   fn handle_output_vibrate_cmd(
@@ -288,7 +425,7 @@ pub trait ProtocolHandler: Sync + Send {
     _feature_id: Uuid,
     _speed: u32,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented("OutputCmd (Vibrate Actuator)")
+    output_unimplemented(0)
   }
 
   fn handle_output_rotate_cmd(
@@ -297,7 +434,7 @@ pub trait ProtocolHandler: Sync + Send {
     _feature_id: Uuid,
     _speed: i32,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented("OutputCmd (Rotate Actuator)")
+    output_unimplemented(1)
   }
 
   fn handle_output_oscillate_cmd(
@@ -306,7 +443,7 @@ pub trait ProtocolHandler: Sync + Send {
     _feature_id: Uuid,
     _speed: u32,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented("OutputCmd (Oscillate Actuator)")
+    output_unimplemented(2)
   }
 
   fn handle_output_spray_cmd(
@@ -315,7 +452,7 @@ pub trait ProtocolHandler: Sync + Send {
     _feature_id: Uuid,
     _level: u32,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented("OutputCmd (Spray Actuator)")
+    output_unimplemented(3)
   }
 
   fn handle_output_constrict_cmd(
@@ -324,7 +461,7 @@ pub trait ProtocolHandler: Sync + Send {
     _feature_id: Uuid,
     _level: u32,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented("OutputCmd (Constrict Actuator)")
+    output_unimplemented(4)
   }
 
   fn handle_output_temperature_cmd(
@@ -333,7 +470,7 @@ pub trait ProtocolHandler: Sync + Send {
     _feature_id: Uuid,
     _level: i32,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented("OutputCmd (Temperature Actuator)")
+    output_unimplemented(5)
   }
 
   fn handle_output_led_cmd(
@@ -342,7 +479,7 @@ pub trait ProtocolHandler: Sync + Send {
     _feature_id: Uuid,
     _level: u32,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented("OutputCmd (Led Actuator)")
+    output_unimplemented(6)
   }
 
   fn handle_output_position_cmd(
@@ -351,7 +488,7 @@ pub trait ProtocolHandler: Sync + Send {
     _feature_id: Uuid,
     _position: u32,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented("OutputCmd (Position Actuator)")
+    output_unimplemented(7)
   }
 
   fn handle_hw_position_with_duration_cmd(
@@ -361,34 +498,28 @@ pub trait ProtocolHandler: Sync + Send {
     _position: u32,
     _duration: u32,
   ) -> Result<Vec<HardwareCommand>, ButtplugDeviceError> {
-    self.command_unimplemented("OutputCmd (Position w/ Duration Actuator)")
+    output_unimplemented(8)
   }
 
   fn handle_input_subscribe_cmd(
     &self,
     _device_index: u32,
-    _device: Arc<Hardware>,
+    device: Arc<Hardware>,
     _feature_index: u32,
     _feature_id: Uuid,
     _sensor_type: InputType,
   ) -> BoxFuture<'_, Result<(), ButtplugDeviceError>> {
-    future::ready(Err(ButtplugDeviceError::UnhandledCommand(
-      "Command not implemented for this protocol: InputCmd (Subscribe)".to_string(),
-    )))
-    .boxed()
+    input_unimplemented(device, 0)
   }
 
   fn handle_input_unsubscribe_cmd(
     &self,
-    _device: Arc<Hardware>,
+    device: Arc<Hardware>,
     _feature_index: u32,
     _feature_id: Uuid,
     _sensor_type: InputType,
   ) -> BoxFuture<'_, Result<(), ButtplugDeviceError>> {
-    future::ready(Err(ButtplugDeviceError::UnhandledCommand(
-      "Command not implemented for this protocol: InputCmd (Unsubscribe)".to_string(),
-    )))
-    .boxed()
+    input_unimplemented(device, 1)
   }
 
   fn handle_input_read_cmd(
@@ -399,15 +530,14 @@ pub trait ProtocolHandler: Sync + Send {
     feature_id: Uuid,
     sensor_type: InputType,
   ) -> BoxFuture<'_, Result<InputReadingV4, ButtplugDeviceError>> {
-    match sensor_type {
-      InputType::Battery => {
-        self.handle_battery_level_cmd(device_index, device, feature_index, feature_id)
-      }
-      _ => future::ready(Err(ButtplugDeviceError::UnhandledCommand(
-        "Command not implemented for this protocol: InputCmd (Read)".to_string(),
-      )))
-      .boxed(),
-    }
+    default_handle_input_read_cmd(
+      self.as_dyn_protocol_handler(),
+      device_index,
+      device,
+      feature_index,
+      feature_id,
+      sensor_type,
+    )
   }
 
   // Used for clients that have inputs which can be subscribed. Subscribed inputs should be
@@ -426,42 +556,16 @@ pub trait ProtocolHandler: Sync + Send {
     feature_index: u32,
     feature_id: Uuid,
   ) -> BoxFuture<'_, Result<InputReadingV4, ButtplugDeviceError>> {
-    // If we have a standardized BLE Battery endpoint, handle that above the
-    // protocol, as it'll always be the same.
-    if device.endpoints().contains(&Endpoint::RxBLEBattery) {
-      debug!("Trying to get battery reading.");
-      let msg = HardwareReadCmd::new(feature_id, Endpoint::RxBLEBattery, 1, 0);
-      let fut = device.read_value(&msg);
-      async move {
-        let hw_msg = fut.await?;
-        let battery_level = hw_msg.data()[0] as i32;
-        let battery_reading = InputReadingV4::new(
-          device_index,
-          feature_index,
-          buttplug_core::message::InputTypeReading::Battery(InputValue::new(battery_level as u8)),
-        );
-        debug!("Got battery reading: {}", battery_level);
-        Ok(battery_reading)
-      }
-      .boxed()
-    } else {
-      future::ready(Err(ButtplugDeviceError::UnhandledCommand(
-        "Command not implemented for this protocol: SensorReadCmd".to_string(),
-      )))
-      .boxed()
-    }
+    default_handle_battery_level_cmd(device_index, device, feature_index, feature_id)
   }
 
   fn handle_rssi_level_cmd(
     &self,
-    _device: Arc<Hardware>,
+    device: Arc<Hardware>,
     _feature_index: u32,
     _feature_id: Uuid,
   ) -> BoxFuture<'_, Result<(), ButtplugDeviceError>> {
-    future::ready(Err(ButtplugDeviceError::UnhandledCommand(
-      "Command not implemented for this protocol: SensorReadCmd".to_string(),
-    )))
-    .boxed()
+    input_unimplemented(device, 2)
   }
 
   fn event_stream(
@@ -480,7 +584,7 @@ macro_rules! generic_protocol_setup {
       pub const IDENTIFIER: &str = $protocol_identifier;
 
       pub fn create_identifier() -> Box<dyn ProtocolIdentifier> {
-        Box::new(GenericProtocolIdentifier::<super::$protocol_name>::new(
+        Box::new(GenericProtocolIdentifier::new::<super::$protocol_name>(
           IDENTIFIER,
         ))
       }
@@ -492,27 +596,24 @@ macro_rules! generic_protocol_setup {
 macro_rules! generic_protocol_initializer_setup {
   ( $protocol_name:ident, $protocol_identifier:tt) => {
     paste::paste! {
+      // This macro used to generate an identifier type per protocol, and the protocol files
+      // import what that needed. The shared GenericProtocolIdentifier does not need it.
+      #[allow(unused_imports)]
+      use self::{
+        ProtocolCommunicationSpecifier as _,
+        ProtocolIdentifier as _,
+        UserDeviceIdentifier as _,
+      };
+
       pub mod setup {
-        use $crate::device::protocol::ProtocolIdentifier;
+        use $crate::device::protocol::{GenericProtocolIdentifier, ProtocolIdentifier};
 
         pub const IDENTIFIER: &str = $protocol_identifier;
 
         pub fn create_identifier() -> Box<dyn ProtocolIdentifier> {
-          Box::new(super::[< $protocol_name Identifier >]::default())
-        }
-      }
-
-      #[derive(Default)]
-      pub struct [< $protocol_name Identifier >] {}
-
-      #[async_trait]
-      impl ProtocolIdentifier for [< $protocol_name Identifier >] {
-        async fn identify(
-          &mut self,
-          hardware: Arc<Hardware>,
-          _: ProtocolCommunicationSpecifier,
-        ) -> Result<(UserDeviceIdentifier, Box<dyn ProtocolInitializer>), ButtplugDeviceError> {
-          Ok((UserDeviceIdentifier::new(hardware.address(), $protocol_identifier, &Some(hardware.name().to_owned())), Box::new([< $protocol_name Initializer >]::default())))
+          Box::new(GenericProtocolIdentifier::with_initializer::<
+            super::[< $protocol_name Initializer >],
+          >(IDENTIFIER))
         }
       }
     }
