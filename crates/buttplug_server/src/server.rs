@@ -256,7 +256,9 @@ impl ButtplugServer {
     let features = self.device_manager().feature_map();
     let msg_id = msg.id();
     trace!("Server received: {:?}", msg);
+    #[cfg(feature = "legacy-specs")]
     let v = msg.version();
+    #[cfg(feature = "legacy-specs")]
     let spec_version = if let Some(current_version) = self.spec_version() {
       current_version
     } else {
@@ -288,6 +290,21 @@ impl ButtplugServer {
         }
         .boxed()
       }
+      // Without the older spec versions, their messages are answered with a v4 error
+      #[cfg(not(feature = "legacy-specs"))]
+      _ => {
+        let mut err_msg = ErrorV0::from(ButtplugError::from(
+          ButtplugMessageError::MessageConversionError(
+            "This server is built without message spec versions 0 to 3".to_owned(),
+          ),
+        ));
+        err_msg.set_id(msg_id);
+        future::ready(Err(ButtplugServerMessageVariant::from(
+          ButtplugServerMessageV4::from(err_msg),
+        )))
+        .boxed()
+      }
+      #[cfg(feature = "legacy-specs")]
       msg => {
         let converter = ButtplugServerMessageConverter::new(Some(msg.clone()));
         match ButtplugCheckedClientMessageV4::try_from_client_message(msg, &features) {

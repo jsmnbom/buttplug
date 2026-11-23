@@ -20,7 +20,11 @@ doc = true
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default=["tokio-runtime"]
+default=["tokio-runtime", "legacy-specs"]
+# Message spec versions 0 to 3: clients that speak them are answered in their version. Without it
+# only spec version 4 is spoken, older messages get an error, and the conversion code (a few
+# hundred functions) is not in the binary.
+legacy-specs=[]
 tokio-runtime=["buttplug_core/tokio-runtime"]
 wasm=["buttplug_core/wasm", "uuid/js", "instant/wasm-bindgen"]
 

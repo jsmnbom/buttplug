@@ -32,6 +32,7 @@ use buttplug_core::{
 
 use dashmap::DashSet;
 
+#[cfg(feature = "legacy-specs")]
 use crate::message::{DeviceAddedV0, DeviceAddedV1, DeviceAddedV2, DeviceAddedV3};
 
 use super::message::{
@@ -82,22 +83,28 @@ impl ButtplugServerDeviceEventMessageConverter {
       if *version == ButtplugMessageSpecVersion::Version4 {
         return Some(ButtplugServerMessageVariant::V4(list.clone().into()));
       }
-      let da3 = DeviceAddedV3::from((*device).clone());
-      if *version == ButtplugMessageSpecVersion::Version3 {
-        return Some(ButtplugServerMessageVariant::V3(da3.into()));
+      // Without the older spec versions there is nothing to say to such a client
+      #[cfg(not(feature = "legacy-specs"))]
+      return None;
+      #[cfg(feature = "legacy-specs")]
+      {
+        let da3 = DeviceAddedV3::from((*device).clone());
+        if *version == ButtplugMessageSpecVersion::Version3 {
+          return Some(ButtplugServerMessageVariant::V3(da3.into()));
+        }
+        let da2 = DeviceAddedV2::from(da3);
+        if *version == ButtplugMessageSpecVersion::Version2 {
+          return Some(ButtplugServerMessageVariant::V2(da2.into()));
+        }
+        let da1 = DeviceAddedV1::from(da2);
+        if *version == ButtplugMessageSpecVersion::Version1 {
+          return Some(ButtplugServerMessageVariant::V1(da1.into()));
+        }
+        let da0 = DeviceAddedV0::from(da1);
+        return Some(ButtplugServerMessageVariant::V0(
+          ButtplugServerMessageV0::DeviceAdded(da0),
+        ));
       }
-      let da2 = DeviceAddedV2::from(da3);
-      if *version == ButtplugMessageSpecVersion::Version2 {
-        return Some(ButtplugServerMessageVariant::V2(da2.into()));
-      }
-      let da1 = DeviceAddedV1::from(da2);
-      if *version == ButtplugMessageSpecVersion::Version1 {
-        return Some(ButtplugServerMessageVariant::V1(da1.into()));
-      }
-      let da0 = DeviceAddedV0::from(da1);
-      return Some(ButtplugServerMessageVariant::V0(
-        ButtplugServerMessageV0::DeviceAdded(da0),
-      ));
     }
 
     // Check for removed devices
@@ -134,10 +141,12 @@ impl ButtplugServerDeviceEventMessageConverter {
   }
 }
 
+#[cfg_attr(not(feature = "legacy-specs"), allow(dead_code))]
 pub struct ButtplugServerMessageConverter {
   original_message: Option<ButtplugClientMessageVariant>,
 }
 
+#[cfg_attr(not(feature = "legacy-specs"), allow(dead_code))]
 impl ButtplugServerMessageConverter {
   pub fn new(msg: Option<ButtplugClientMessageVariant>) -> Self {
     Self {
@@ -155,15 +164,30 @@ impl ButtplugServerMessageConverter {
     version: &ButtplugMessageSpecVersion,
   ) -> Result<ButtplugServerMessageVariant, ButtplugError> {
     let mut outgoing_msg = match version {
+      #[cfg(not(feature = "legacy-specs"))]
+      ButtplugMessageSpecVersion::Version0
+      | ButtplugMessageSpecVersion::Version1
+      | ButtplugMessageSpecVersion::Version2
+      | ButtplugMessageSpecVersion::Version3 => {
+        return Err(ButtplugError::from(
+          ButtplugMessageError::MessageConversionError(
+            "This server is built without message spec versions 0 to 3".to_owned(),
+          ),
+        ));
+      }
+      #[cfg(feature = "legacy-specs")]
       ButtplugMessageSpecVersion::Version0 => {
         ButtplugServerMessageVariant::V0(self.convert_servermessagev4_to_servermessagev0(msg)?)
       }
+      #[cfg(feature = "legacy-specs")]
       ButtplugMessageSpecVersion::Version1 => {
         ButtplugServerMessageVariant::V1(self.convert_servermessagev4_to_servermessagev1(msg)?)
       }
+      #[cfg(feature = "legacy-specs")]
       ButtplugMessageSpecVersion::Version2 => {
         ButtplugServerMessageVariant::V2(self.convert_servermessagev4_to_servermessagev2(msg)?)
       }
+      #[cfg(feature = "legacy-specs")]
       ButtplugMessageSpecVersion::Version3 => {
         ButtplugServerMessageVariant::V3(self.convert_servermessagev4_to_servermessagev3(msg)?)
       }
