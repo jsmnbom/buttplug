@@ -25,7 +25,7 @@ use crate::device::{
   OutputObservation,
   device_handle::build_device_handle,
   hardware::communication::{HardwareCommunicationManager, HardwareCommunicationManagerEvent},
-  protocol::get_protocol_specializers,
+  protocol::{ProtocolLookup, get_protocol_specializers},
 };
 use dashmap::{DashMap, DashSet};
 use futures::{FutureExt, future};
@@ -81,6 +81,8 @@ pub(super) struct ServerDeviceManagerEventLoop {
   scanning_state: ScanningState,
   /// Devices currently trying to connect.
   connecting_devices: Arc<DashSet<String>>,
+  /// Finds the protocol implementation for a matched protocol name.
+  protocol_lookup: ProtocolLookup,
   /// Cancellation token for the event loop
   loop_cancellation_token: CancellationToken,
   /// Owner for device bring-up tasks accepted by this event loop.
@@ -101,6 +103,7 @@ impl ServerDeviceManagerEventLoop {
     device_command_receiver: mpsc::Receiver<DeviceManagerCommand>,
     output_observation_sender: Option<broadcast::Sender<OutputObservation>>,
     task_group: TaskGroup,
+    protocol_lookup: ProtocolLookup,
   ) -> Self {
     let (device_event_sender, device_event_receiver) = mpsc::channel(16);
     Self {
@@ -117,6 +120,7 @@ impl ServerDeviceManagerEventLoop {
       loop_cancellation_token,
       task_group,
       output_observation_sender,
+      protocol_lookup,
     }
   }
 
@@ -279,6 +283,7 @@ impl ServerDeviceManagerEventLoop {
         let protocol_specializers = get_protocol_specializers(
           &creator.specifier(),
           &self.device_config_manager,
+          self.protocol_lookup,
         );
 
         // If we have no identifiers, then there's nothing to do here. Throw an error.

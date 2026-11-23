@@ -92,4 +92,10 @@ pub enum ButtplugServerError {
   /// Requested protocol has not been registered with the system.
   #[error("Buttplug Protocol of type {0} does not exist in the system and cannot be removed.")]
   ProtocolDoesNotExist(String),
+  /// Built without the `builtin-protocols` feature and given no protocol lookup.
+  #[error(
+    "No protocol lookup: set one with ServerDeviceManagerBuilder::protocol_lookup, or enable the \
+     builtin-protocols feature"
+  )]
+  NoProtocolLookup,
 }

@@ -16,6 +16,7 @@ use crate::{
     DeviceHandle,
     OutputObservation,
     hardware::communication::{HardwareCommunicationManager, HardwareCommunicationManagerBuilder},
+    protocol::ProtocolLookup,
     server_device_manager_event_loop::ServerDeviceManagerEventLoop,
   },
   message::{
@@ -80,6 +81,7 @@ pub struct ServerDeviceManagerBuilder {
   device_configuration_manager: Arc<DeviceConfigurationManager>,
   comm_managers: Vec<Box<dyn HardwareCommunicationManagerBuilder>>,
   emit_output_observations: bool,
+  protocol_lookup: Option<ProtocolLookup>,
 }
 
 impl ServerDeviceManagerBuilder {
@@ -88,6 +90,7 @@ impl ServerDeviceManagerBuilder {
       device_configuration_manager: Arc::new(device_configuration_manager),
       comm_managers: vec![],
       emit_output_observations: false,
+      protocol_lookup: None,
     }
   }
 
@@ -98,6 +101,7 @@ impl ServerDeviceManagerBuilder {
       device_configuration_manager,
       comm_managers: vec![],
       emit_output_observations: false,
+      protocol_lookup: None,
     }
   }
 
@@ -106,6 +110,13 @@ impl ServerDeviceManagerBuilder {
     T: HardwareCommunicationManagerBuilder + 'static,
   {
     self.comm_managers.push(Box::new(builder));
+    self
+  }
+
+  /// Find protocol implementations with `lookup` instead of the built-in lookup over every
+  /// protocol. Required without the `builtin-protocols` feature.
+  pub fn protocol_lookup(&mut self, lookup: ProtocolLookup) -> &mut Self {
+    self.protocol_lookup = Some(lookup);
     self
   }
 
@@ -135,6 +146,14 @@ impl ServerDeviceManagerBuilder {
   }
 
   pub fn finish(&mut self) -> Result<ServerDeviceManager, ButtplugServerError> {
+    #[cfg(feature = "builtin-protocols")]
+    let protocol_lookup = self
+      .protocol_lookup
+      .unwrap_or(crate::device::protocol_impl::get_protocol_identifier);
+    #[cfg(not(feature = "builtin-protocols"))]
+    let protocol_lookup = self
+      .protocol_lookup
+      .ok_or(ButtplugServerError::NoProtocolLookup)?;
     let (device_command_sender, device_command_receiver) = mpsc::channel(16);
     let (device_event_sender, device_event_receiver) = mpsc::channel(16);
     let mut comm_managers: Vec<Box<dyn HardwareCommunicationManager>> = Vec::new();
@@ -201,6 +220,7 @@ impl ServerDeviceManagerBuilder {
       device_command_receiver,
       output_observation_sender.clone(),
       task_group.clone(),
+      protocol_lookup,
     );
     // The event loop is the device manager's owned long-running task; spawning
     // it into the manager's TaskGroup lets shutdown cancel-then-join it
